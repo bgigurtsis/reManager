@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -9,17 +10,21 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 	"golang.org/x/crypto/ssh"
 )
 
 type App struct {
-	ctx           context.Context
-	client        *ssh.Client
-	session       *ssh.Session
-	mu            sync.Mutex
-	connectCancel context.CancelFunc
+	ctx            context.Context
+	client         *ssh.Client
+	session        *ssh.Session
+	mu             sync.Mutex
+	connectCancel  context.CancelFunc
+	commandCancel  context.CancelFunc
+	commandSession *ssh.Session
+	commandStdin   io.WriteCloser
 }
 
 func NewApp() *App {
@@ -78,6 +83,38 @@ func (a *App) SelectKeyFile() string {
 	return path
 }
 
+func (a *App) CheckComponentStatus(componentID string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.client == nil {
+		return false
+	}
+
+	var checkCmd string
+	switch componentID {
+	case "xovi":
+		checkCmd = "test -d /home/root/xovi && echo 'yes' || echo 'no'"
+	case "qt-resource-rebuilder":
+		checkCmd = "test -f /home/root/xovi/extensions.d/qt-resource-rebuilder.so && echo 'yes' || echo 'no'"
+	case "tripletap":
+		checkCmd = "test -f /home/root/xovi-tripletap/uninstall.sh && echo 'yes' || echo 'no'"
+	case "rm-hacks":
+		checkCmd = "test -f /home/root/xovi/exthome/qt-resource-rebuilder/zz_rmhacks.qmd && test -d /home/root/xovi/exthome/qt-resource-rebuilder/rmhacks && echo 'yes' || echo 'no'"
+	case "appload":
+		checkCmd = "test -f /home/root/xovi/extensions.d/appload.so && echo 'yes' || echo 'no'"
+	default:
+		return false
+	}
+
+	output, err := a.runCommand(checkCmd)
+	if err != nil {
+		return false
+	}
+
+	return strings.TrimSpace(output) == "yes"
+}
+
 func (a *App) Connect(host, password string) ConnectionResult {
 	return a.ConnectWithAuth(host, "password", password, "")
 }
@@ -107,6 +144,104 @@ func (a *App) dialWithContext(ctx context.Context, addr string, config *ssh.Clie
 		return nil, err
 	}
 	return ssh.NewClient(c, chans, reqs), nil
+}
+
+func isRetryableError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	errStr := strings.ToLower(err.Error())
+
+	nonRetryableKeywords := []string{
+		"passphrase",
+		"permission denied",
+		"unable to authenticate",
+		"ssh: handshake failed",
+		"no auth",
+		"authentication failed",
+	}
+
+	for _, keyword := range nonRetryableKeywords {
+		if strings.Contains(errStr, keyword) {
+			return false
+		}
+	}
+
+	retryableKeywords := []string{
+		"no route to host",
+		"connection refused",
+		"i/o timeout",
+		"connection reset by peer",
+		"network is unreachable",
+		"host is down",
+		"connection timed out",
+		"broken pipe",
+	}
+
+	for _, keyword := range retryableKeywords {
+		if strings.Contains(errStr, keyword) {
+			return true
+		}
+	}
+
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		if netErr.Timeout() || netErr.Temporary() {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (a *App) dialWithContextWithRetry(ctx context.Context, addr string, config *ssh.ClientConfig) (*ssh.Client, error) {
+	const maxRetries = 3
+	backoffDurations := []time.Duration{
+		2 * time.Second,
+		4 * time.Second,
+		8 * time.Second,
+	}
+
+	var lastErr error
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
+		client, err := a.dialWithContext(ctx, addr, config)
+		if err == nil {
+			return client, nil
+		}
+
+		lastErr = err
+
+		if ctx.Err() == context.Canceled {
+			return nil, context.Canceled
+		}
+
+		if !isRetryableError(err) {
+			return nil, err
+		}
+
+		if attempt == maxRetries {
+			break
+		}
+
+		backoffDuration := backoffDurations[attempt]
+
+		select {
+		case <-time.After(backoffDuration):
+			continue
+		case <-ctx.Done():
+			return nil, context.Canceled
+		}
+	}
+
+	return nil, lastErr
 }
 
 func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) ConnectionResult {
@@ -173,7 +308,7 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 		addr = host + ":22"
 	}
 
-	client, err := a.dialWithContext(ctx, addr, config)
+	client, err := a.dialWithContextWithRetry(ctx, addr, config)
 	if err != nil {
 		if ctx.Err() == context.Canceled {
 			return ConnectionResult{
@@ -221,9 +356,9 @@ func (a *App) detectDevice() (string, error) {
 	case strings.Contains(machine, "reMarkable 2"):
 		return "rm2", nil
 	case strings.Contains(machine, "Ferrari"):
-		return "paperpro", nil
+		return "rmpp", nil
 	case strings.Contains(machine, "Chiappa"):
-		return "move", nil
+		return "rmppm", nil
 	default:
 		return machine, nil
 	}
@@ -275,9 +410,9 @@ func (a *App) RunCommandWithOutput(cmd string) {
 	fmt.Println("[DEBUG] RunCommandWithOutput called:", cmd[:min(50, len(cmd))])
 	go func() {
 		a.mu.Lock()
-		defer a.mu.Unlock()
 
 		if a.client == nil {
+			a.mu.Unlock()
 			fmt.Println("[DEBUG] Not connected, emitting error")
 			runtime.EventsEmit(a.ctx, "command:output", "Error: not connected\n")
 			runtime.EventsEmit(a.ctx, "command:done", false)
@@ -286,12 +421,40 @@ func (a *App) RunCommandWithOutput(cmd string) {
 
 		session, err := a.client.NewSession()
 		if err != nil {
+			a.mu.Unlock()
 			fmt.Println("[DEBUG] Session error:", err)
 			runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("Error: %v\n", err))
 			runtime.EventsEmit(a.ctx, "command:done", false)
 			return
 		}
-		defer session.Close()
+
+		// Request PTY to enable signal handling (Ctrl+C via stdin)
+		// This allows StopCommand() to send \x03 which the terminal driver converts to SIGINT
+		err = session.RequestPty("xterm-256color", 40, 120, ssh.TerminalModes{
+			ssh.ECHO:          1,     // Enable echo
+			ssh.TTY_OP_ISPEED: 14400, // Input speed
+			ssh.TTY_OP_OSPEED: 14400, // Output speed
+		})
+		if err != nil {
+			a.mu.Unlock()
+			fmt.Println("[DEBUG] PTY request error:", err)
+			runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("Error requesting PTY: %v\n", err))
+			runtime.EventsEmit(a.ctx, "command:done", false)
+			return
+		}
+		fmt.Println("[DEBUG] PTY allocated successfully")
+
+		// Store session and release lock immediately
+		a.commandSession = session
+		a.mu.Unlock()
+
+		defer func() {
+			session.Close()
+			a.mu.Lock()
+			a.commandSession = nil
+			a.commandStdin = nil
+			a.mu.Unlock()
+		}()
 
 		stdout, err := session.StdoutPipe()
 		if err != nil {
@@ -306,6 +469,18 @@ func (a *App) RunCommandWithOutput(cmd string) {
 			runtime.EventsEmit(a.ctx, "command:done", false)
 			return
 		}
+
+		stdin, err := session.StdinPipe()
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("Error: %v\n", err))
+			runtime.EventsEmit(a.ctx, "command:done", false)
+			return
+		}
+
+		// Store stdin reference
+		a.mu.Lock()
+		a.commandStdin = stdin
+		a.mu.Unlock()
 
 		fmt.Println("[DEBUG] Starting command")
 		if err := session.Start(cmd); err != nil {
@@ -355,6 +530,24 @@ func (a *App) RunCommandWithOutput(cmd string) {
 	}()
 }
 
+func (a *App) StopCommand() {
+	a.mu.Lock()
+	stdin := a.commandStdin
+	a.mu.Unlock()
+
+	if stdin != nil {
+		fmt.Println("[DEBUG] Sending Ctrl+C (0x03) to stdin")
+		_, err := stdin.Write([]byte{0x03})
+		if err != nil {
+			fmt.Printf("[DEBUG] Error writing Ctrl+C to stdin: %v\n", err)
+		} else {
+			fmt.Println("[DEBUG] Ctrl+C sent successfully")
+		}
+	} else {
+		fmt.Println("[DEBUG] No stdin available to send Ctrl+C")
+	}
+}
+
 func (a *App) GetDeviceInfo() map[string]string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -384,4 +577,33 @@ func (a *App) GetDeviceInfo() map[string]string {
 	}
 
 	return info
+}
+
+type UpdateServiceStatus struct {
+	Enabled bool `json:"enabled"`
+	Running bool `json:"running"`
+}
+
+func (a *App) GetUpdateServiceStatus() UpdateServiceStatus {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	status := UpdateServiceStatus{
+		Enabled: false,
+		Running: false,
+	}
+
+	if a.client == nil {
+		return status
+	}
+
+	if output, err := a.runCommand("systemctl is-enabled update-engine.service"); err == nil {
+		status.Enabled = strings.TrimSpace(output) == "enabled"
+	}
+
+	if output, err := a.runCommand("systemctl is-active update-engine.service"); err == nil {
+		status.Running = strings.TrimSpace(output) == "active"
+	}
+
+	return status
 }
