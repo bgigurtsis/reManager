@@ -16,7 +16,7 @@ func main() {
 	app := NewApp()
 
 	err := wails.Run(&options.App{
-		Title:  "Xovi Installer",
+		Title:  "reManager",
 		Width:  900,
 		Height: 800,
 		AssetServer: &assetserver.Options{

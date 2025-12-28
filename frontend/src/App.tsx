@@ -6,17 +6,37 @@ import { Label } from '@/components/ui/label'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { Terminal } from '@/components/Terminal'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
+import { ProgressModal } from '@/components/ProgressModal'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { Loader2, Unplug, Check, AlertTriangle, Trash2 } from 'lucide-react'
-import { componentRegistry } from '@/lib/components/registry'
-import '@/lib/components/definitions'
-import { createComponentInstaller } from '@/lib/components/engine/installer'
-import { DependencyResolver } from '@/lib/components/engine/dependency-resolver'
-import { systemTasks } from '@/lib/components/system-tasks'
-import { CommandUtils } from '@/lib/components/utils'
-import type { CommandContext, DeviceArchitecture, DeviceType, HookExecutionResult } from '@/lib/components/types'
+
+interface ComponentInfo {
+  id: string
+  name: string
+  description: string
+  version: string
+  author: string
+  dependencies: string[]
+  category: string
+  tags: string[]
+}
+
+interface MaintenanceCommandInfo {
+  id: string
+  label: string
+  description: string
+  requiresTerminal: boolean
+  allowStop: boolean
+}
+
+interface SystemTaskInfo {
+  id: string
+  label: string
+  description: string
+  requiresTerminal: boolean
+  needsWriteableRoot: boolean
+}
 
 interface SSHKey {
   path: string
@@ -26,6 +46,27 @@ interface SSHKey {
 interface UpdateServiceStatus {
   enabled: boolean
   running: boolean
+}
+
+interface InstallProgress {
+  component: string
+  index: number
+  total: number
+  status: string
+  message: string
+}
+
+interface InstallResult {
+  success: boolean
+  errors: string[]
+}
+
+interface DialogRequest {
+  title: string
+  message: string
+  steps: string[]
+  confirmText: string
+  inProgressMessage: string
 }
 
 declare global {
@@ -39,13 +80,25 @@ declare global {
           Disconnect(): Promise<void>
           IsConnected(): Promise<boolean>
           RunCommand(cmd: string): Promise<string>
-          RunCommandWithOutput(cmd: string): Promise<void>
+          RunCommandWithOutput(cmd: string, requiresPTY: boolean): Promise<void>
           StopCommand(): Promise<void>
           GetDeviceInfo(): Promise<Record<string, string>>
           GetUpdateServiceStatus(): Promise<UpdateServiceStatus>
           GetDefaultSSHKeys(): Promise<SSHKey[]>
           SelectKeyFile(): Promise<string>
           CheckComponentStatus(componentId: string): Promise<boolean>
+          GetComponents(): Promise<ComponentInfo[]>
+          ResolveDependencies(componentIds: string[]): Promise<string[]>
+          GetComponentDependents(componentId: string): Promise<string[]>
+          GetMaintenanceCommands(componentId: string): Promise<MaintenanceCommandInfo[]>
+          GetSystemTasksInfo(): Promise<SystemTaskInfo[]>
+          GetDeviceDisplayName(machine: string): Promise<string>
+          GetDeviceArchitecture(deviceType: string): Promise<string>
+          InstallComponents(componentIds: string[], deviceType: string): Promise<void>
+          UninstallComponents(componentIds: string[], deviceType: string): Promise<void>
+          RunMaintenanceCommand(componentId: string, commandId: string, deviceType: string): Promise<void>
+          RunSystemTask(taskId: string, deviceType: string): Promise<void>
+          RespondToDialog(confirmed: boolean): Promise<void>
         }
       }
     }
@@ -54,8 +107,6 @@ declare global {
     }
   }
 }
-
-const COMPONENTS = componentRegistry.getAll()
 
 type Step = 'connect' | 'select' | 'install' | 'done'
 
@@ -79,7 +130,7 @@ export default function App() {
   const [currentComponent, setCurrentComponent] = useState('')
   const [showRebuildDialog, setShowRebuildDialog] = useState(false)
   const [rebuildInProgress, setRebuildInProgress] = useState(false)
-  const [pendingRebuildCallback, setPendingRebuildCallback] = useState<{ resolve: () => void; reject: (err: Error) => void } | null>(null)
+  const [dialogRequest, setDialogRequest] = useState<DialogRequest | null>(null)
   const [showOverwriteDialog, setShowOverwriteDialog] = useState(false)
   const [componentsToOverwrite, setComponentsToOverwrite] = useState<string[]>([])
   const [pendingInstallCallback, setPendingInstallCallback] = useState<{ resolve: () => void; reject: () => void } | null>(null)
@@ -102,26 +153,44 @@ export default function App() {
   const [commandContext, setCommandContext] = useState<'install' | 'maintenance' | null>(null)
   const commandContextRef = useRef<'install' | 'maintenance' | null>(null)
 
+  const [showProgressModal, setShowProgressModal] = useState(false)
+  const [progressModalType, setProgressModalType] = useState<'install' | 'maintenance' | null>(null)
+  const [progressIndex, setProgressIndex] = useState(0)
+  const [progressTotal, setProgressTotal] = useState(0)
+  const [progressPercentage, setProgressPercentage] = useState(0)
+
+  const [components, setComponents] = useState<ComponentInfo[]>([])
+  const [systemTasks, setSystemTasks] = useState<SystemTaskInfo[]>([])
+  const [maintenanceCommands, setMaintenanceCommands] = useState<Record<string, MaintenanceCommandInfo[]>>({})
+
   useEffect(() => {
     commandContextRef.current = commandContext
   }, [commandContext])
 
   useEffect(() => {
-    const loadKeys = async () => {
+    const loadInitialData = async () => {
       try {
-        const keys = await window.go.main.App.GetDefaultSSHKeys()
+        const [keys, comps, tasks] = await Promise.all([
+          window.go.main.App.GetDefaultSSHKeys(),
+          window.go.main.App.GetComponents(),
+          window.go.main.App.GetSystemTasksInfo(),
+        ])
+
         setAvailableKeys(keys || [])
         if (keys && keys.length > 0) {
           setSelectedKey(keys[0].path)
         } else {
           setSelectedKey('__other__')
         }
+
+        setComponents(comps || [])
+        setSystemTasks(tasks || [])
       } catch (err) {
-        console.log('Could not load SSH keys:', err)
+        console.log('Could not load initial data:', err)
         setSelectedKey('__other__')
       }
     }
-    loadKeys()
+    loadInitialData()
   }, [])
 
   useEffect(() => {
@@ -155,7 +224,6 @@ export default function App() {
       const data = args[0] as string
       console.log('Received command:output:', data)
 
-      // Route to appropriate state based on context - read from ref!
       if (commandContextRef.current === 'maintenance') {
         setMaintenanceOutput((prev) => prev + data)
       } else {
@@ -166,6 +234,7 @@ export default function App() {
     const unsubscribeDone = window.runtime.EventsOn('command:done', (...args: unknown[]) => {
       const success = args[0] as boolean
       console.log('Received command:done:', success)
+      setCommandRunning(false)
       if (!success) {
         if (commandContextRef.current === 'maintenance') {
           setMaintenanceOutput((prev) => prev + '\n[Command failed]\n')
@@ -175,9 +244,67 @@ export default function App() {
       }
     })
 
+    const unsubscribeProgress = window.runtime.EventsOn('install:progress', (...args: unknown[]) => {
+      const progress = args[0] as InstallProgress
+      console.log('Received install:progress:', progress)
+      setCurrentComponent(progress.component)
+      setProgressTotal(progress.total)
+
+      // Update progress bar only when components complete
+      if (progress.status === 'completed') {
+        const completedCount = progress.index + 1
+        setProgressIndex(completedCount)
+        setProgressPercentage(Math.round((completedCount / progress.total) * 100))
+      } else {
+        // For installing/error states, just update the index for display
+        setProgressIndex(progress.index)
+      }
+
+      if (progress.status === 'installing') {
+        setOutput((prev) => prev + `\n=== Installing ${progress.component} ===\n`)
+      } else if (progress.status === 'completed') {
+        setOutput((prev) => prev + `${progress.message}\n`)
+      } else if (progress.status === 'error') {
+        setOutput((prev) => prev + `Error: ${progress.message}\n`)
+      }
+    })
+
+    const unsubscribeComplete = window.runtime.EventsOn('install:complete', async (...args: unknown[]) => {
+      const result = args[0] as InstallResult
+      console.log('Received install:complete:', result)
+
+      if (result.success) {
+        setOutput((prev) => prev + '\n=== Installation complete! ===\n')
+        setOutput((prev) => prev + 'Run xovi/start or triple-tap the power button to start xovi.\n')
+        setProgressPercentage(100)
+      } else {
+        setOutput((prev) => prev + `\nErrors occurred:\n${result.errors.join('\n')}\n`)
+      }
+
+      await rescanAllComponents()
+
+      setInstalling(false)
+      setUninstalling(false)
+      setCommandRunning(false)
+      setCurrentComponent('')
+      setCommandContext(null)
+      setRebuildInProgress(false)
+      setDialogRequest(null)
+    })
+
+    const unsubscribeDialog = window.runtime.EventsOn('hook:dialog', (...args: unknown[]) => {
+      const dialog = args[0] as DialogRequest
+      console.log('Received hook:dialog:', dialog)
+      setDialogRequest(dialog)
+      setShowRebuildDialog(true)
+    })
+
     return () => {
       unsubscribeOutput()
       unsubscribeDone()
+      unsubscribeProgress()
+      unsubscribeComplete()
+      unsubscribeDialog()
     }
   }, [])
 
@@ -204,12 +331,17 @@ export default function App() {
         setDevice(result.device || 'unknown')
         setDeviceInfo(info)
 
-        // Check component status
         const status: Record<string, boolean> = {}
-        for (const comp of COMPONENTS) {
+        const maintCmds: Record<string, MaintenanceCommandInfo[]> = {}
+        for (const comp of components) {
           status[comp.id] = await window.go.main.App.CheckComponentStatus(comp.id)
+          const cmds = await window.go.main.App.GetMaintenanceCommands(comp.id)
+          if (cmds && cmds.length > 0) {
+            maintCmds[comp.id] = cmds
+          }
         }
         setComponentStatus(status)
+        setMaintenanceCommands(maintCmds)
 
         setStep('select')
       } else {
@@ -243,14 +375,12 @@ export default function App() {
     setOutput('')
   }
 
-  const resolver = new DependencyResolver(componentRegistry.getAllAsMap())
-
-  const toggleComponent = (id: string) => {
+  const toggleComponent = async (id: string) => {
     const newSelected = new Set(selected)
     if (newSelected.has(id)) {
       newSelected.delete(id)
 
-      for (const comp of COMPONENTS) {
+      for (const comp of components) {
         if (comp.dependencies.includes(id)) {
           newSelected.delete(comp.id)
         }
@@ -258,60 +388,52 @@ export default function App() {
     } else {
       newSelected.add(id)
 
-      const deps = resolver.getDependencies(id)
-      for (const depId of deps) {
-        if (!componentStatus[depId]) {
-          newSelected.add(depId)
+      try {
+        const resolved = await window.go.main.App.ResolveDependencies([id])
+        for (const depId of resolved) {
+          if (!componentStatus[depId]) {
+            newSelected.add(depId)
+          }
         }
+      } catch (err) {
+        console.error('Error resolving dependencies:', err)
       }
     }
     setSelected(newSelected)
   }
 
-  const toggleComponentForRemoval = (id: string) => {
+  const toggleComponentForRemoval = async (id: string) => {
     const newSelected = new Set(selectedForRemoval)
     if (newSelected.has(id)) {
       newSelected.delete(id)
-      const component = componentRegistry.get(id)
-      if (component) {
-        for (const depId of component.dependencies) {
+
+      const comp = components.find(c => c.id === id)
+      if (comp) {
+        for (const depId of comp.dependencies) {
           newSelected.delete(depId)
         }
       }
     } else {
       newSelected.add(id)
-      const dependents = resolver.getDependents(id)
-      for (const depId of dependents) {
-        if (componentStatus[depId]) {
-          newSelected.add(depId)
+
+      try {
+        const dependents = await window.go.main.App.GetComponentDependents(id)
+        for (const depId of dependents) {
+          if (componentStatus[depId]) {
+            newSelected.add(depId)
+          }
         }
+      } catch (err) {
+        console.error('Error getting dependents:', err)
       }
     }
     setSelectedForRemoval(newSelected)
-  }
-
-  const getArchitecture = (): DeviceArchitecture => {
-    if (device === 'rm1' || device === 'rm2') return 'arm32'
-    if (device === 'rmpp' || device === 'rmppm') return 'aarch64'
-    return 'arm32'
   }
 
   const getDisplayName = (machine: string) => {
     if (machine.includes('Ferrari')) return 'Paper Pro'
     if (machine.includes('Chiappa')) return 'Paper Pro Move'
     return machine
-  }
-
-  const runScript = (script: string): Promise<boolean> => {
-    return new Promise((resolve) => {
-      console.log('runScript: calling RunCommandWithOutput for:', script.substring(0, 50) + '...')
-      const unsubDone = window.runtime.EventsOn('command:done', (...args: unknown[]) => {
-        console.log('runScript: command:done received in promise handler')
-        unsubDone()
-        resolve(args[0] as boolean)
-      })
-      window.go.main.App.RunCommandWithOutput(script)
-    })
   }
 
   const handleInstall = async () => {
@@ -330,129 +452,44 @@ export default function App() {
       }
     }
 
+    setShowProgressModal(true)
+    setProgressModalType('install')
+    setProgressIndex(0)
+    setProgressTotal(selected.size)
+    setProgressPercentage(0)
     setInstalling(true)
     setOutput('')
     setCommandContext('install')
 
-    const installer = createComponentInstaller(
-      (id) => componentRegistry.get(id),
-      () => componentRegistry.getAllAsMap(),
-      (cmd) => {
-        setOutput((prev) => prev + `$ ${cmd}\n`)
-        return runScript(cmd)
-      }
-    )
-
-    const context: CommandContext = {
-      arch: getArchitecture(),
-      device: device as DeviceType,
-      isInstalled: false,
-      componentsStatus: componentStatus,
-    }
-
-    try {
-      const result = await installer.install(
-        Array.from(selected),
-        context,
-        (progress) => {
-          setCurrentComponent(progress.currentComponent)
-          if (progress.status === 'installing') {
-            setOutput((prev) => prev + `\n=== Installing ${progress.currentComponent} ===\n`)
-          } else if (progress.status === 'completed') {
-            setOutput((prev) => prev + `${progress.message}\n`)
-          } else if (progress.status === 'error') {
-            setOutput((prev) => prev + `Error: ${progress.message}\n`)
-          }
-        },
-        async (hookResult: HookExecutionResult) => {
-          if (hookResult.dialogConfig) {
-            await new Promise<void>((resolve, reject) => {
-              setPendingRebuildCallback({ resolve, reject })
-              setShowRebuildDialog(true)
-            })
-
-            setRebuildInProgress(true)
-            const { command } = hookResult
-            if (command) {
-              setOutput((prev) => prev + `$ ${command.script}\n`)
-              await runScript(command.script)
-            }
-            setRebuildInProgress(false)
-          }
-        }
-      )
-
-      if (result.success) {
-        setOutput((prev) => prev + '\n=== Installation complete! ===\n')
-        setOutput((prev) => prev + 'Run xovi/start or triple-tap the power button to start xovi.\n')
-      } else {
-        setOutput((prev) => prev + `\nErrors occurred:\n${result.errors.join('\n')}\n`)
-      }
-    } catch (err) {
-      if (err instanceof Error && err.message === 'cancelled') {
-        setOutput((prev) => prev + '\n=== Installation cancelled ===\n')
-      } else {
-        setOutput((prev) => prev + `\nError: ${err}\n`)
-      }
-    } finally {
-      setInstalling(false)
-      setCurrentComponent('')
-      setCommandContext(null)
-    }
+    await window.go.main.App.InstallComponents(Array.from(selected), device)
   }
 
   const handleUninstall = async () => {
+    setShowProgressModal(true)
+    setProgressModalType('install')
+    setProgressIndex(0)
+    setProgressTotal(selectedForRemoval.size)
+    setProgressPercentage(0)
     setUninstalling(true)
     setMaintenanceOutput('')
+    setCommandContext('maintenance')
 
-    const installer = createComponentInstaller(
-      (id) => componentRegistry.get(id),
-      () => componentRegistry.getAllAsMap(),
-      (cmd) => {
-        setMaintenanceOutput((prev) => prev + `$ ${cmd}\n`)
-        return runScript(cmd)
-      }
-    )
+    await window.go.main.App.UninstallComponents(Array.from(selectedForRemoval), device)
 
-    const context: CommandContext = {
-      arch: getArchitecture(),
-      device: device as DeviceType,
-      isInstalled: true,
-      componentsStatus: componentStatus,
-    }
+    setSelectedForRemoval(new Set())
+  }
 
+  const rescanAllComponents = async () => {
     try {
-      const result = await installer.uninstall(
-        Array.from(selectedForRemoval),
-        context,
-        (progress) => {
-          if (progress.status === 'installing') {
-            setMaintenanceOutput((prev) => prev + `\n=== Uninstalling ${progress.currentComponent} ===\n`)
-          } else if (progress.status === 'completed') {
-            setMaintenanceOutput((prev) => prev + `${progress.message}\n`)
-          } else if (progress.status === 'error') {
-            setMaintenanceOutput((prev) => prev + `Error: ${progress.message}\n`)
-          }
-        }
-      )
-
-      if (result.success) {
-        setMaintenanceOutput((prev) => prev + '\n=== Uninstall complete! ===\n')
-
-        // Refresh component status
-        const status: Record<string, boolean> = {}
-        for (const comp of COMPONENTS) {
-          status[comp.id] = await window.go.main.App.CheckComponentStatus(comp.id)
-        }
-        setComponentStatus(status)
-        setSelectedForRemoval(new Set())
-      } else {
-        setMaintenanceOutput((prev) => prev + `\nErrors occurred:\n${result.errors.join('\n')}\n`)
+      const status: Record<string, boolean> = {}
+      for (const comp of components) {
+        status[comp.id] = await window.go.main.App.CheckComponentStatus(comp.id)
       }
+      setComponentStatus(status)
+      return true
     } catch (err) {
-      setMaintenanceOutput((prev) => prev + `\nError: ${err}\n`)
-    } finally {
-      setUninstalling(false)
+      console.error('Failed to rescan component status:', err)
+      return false
     }
   }
 
@@ -466,106 +503,43 @@ export default function App() {
   }
 
   const handleSystemTask = async (taskId: string) => {
-    const task = systemTasks.find(t => t.id === taskId)
-    if (!task) return
-
+    setShowProgressModal(true)
+    setProgressModalType('maintenance')
+    setProgressPercentage(0)
     setCommandRunning(true)
     setMaintenanceOutput('')
+    setCommandContext('maintenance')
 
-    const context: CommandContext = {
-      arch: getArchitecture(),
-      device: device as DeviceType,
-      isInstalled: false,
-      componentsStatus: componentStatus,
-    }
+    await window.go.main.App.RunSystemTask(taskId, device)
+    await fetchUpdateServiceStatus()
 
-    const commands = task.command(context)
-    if (!commands) {
-      setCommandRunning(false)
-      return
-    }
-
-    const cmdArray = Array.isArray(commands) ? commands : [commands]
-    let wrappedCommands = cmdArray
-
-    // Wrap with writeable root if needed
-    if (task.needsWriteableRoot) {
-      wrappedCommands = CommandUtils.wrapWithWriteableRoot(cmdArray, device as DeviceType)
-    }
-
-    try {
-      for (const cmd of wrappedCommands) {
-        setMaintenanceOutput((prev) => prev + `$ ${cmd.script}\n`)
-        const success = await runScript(cmd.script)
-        if (!success) {
-          setMaintenanceOutput((prev) => prev + `Error executing: ${cmd.description}\n`)
-          break
-        }
-      }
-      setMaintenanceOutput((prev) => prev + '\n=== Command complete ===\n')
-
-      // Refresh update service status after running system tasks
-      await fetchUpdateServiceStatus()
-    } catch (err) {
-      setMaintenanceOutput((prev) => prev + `\nError: ${err}\n`)
-    } finally {
-      setCommandRunning(false)
-    }
+    setCommandRunning(false)
+    setCommandContext(null)
   }
 
   const handleComponentMaintenance = async (componentId: string, commandId: string) => {
-    const component = componentRegistry.get(componentId)
-    if (!component?.maintenanceCommands) return
+    const cmds = maintenanceCommands[componentId]
+    if (!cmds) return
 
-    const cmd = component.maintenanceCommands.find(c => c.id === commandId)
+    const cmd = cmds.find(c => c.id === commandId)
     if (!cmd) return
 
     if (cmd.allowStop) {
       setCurrentRunningCommand({ componentId, commandId })
     }
 
+    setShowProgressModal(true)
+    setProgressModalType('maintenance')
+    setProgressPercentage(0)
     setCommandRunning(true)
     setMaintenanceOutput('')
     setCommandContext('maintenance')
 
-    const context: CommandContext = {
-      arch: getArchitecture(),
-      device: device as DeviceType,
-      isInstalled: true,
-      componentsStatus: componentStatus,
-    }
+    await window.go.main.App.RunMaintenanceCommand(componentId, commandId, device)
 
-    const command = cmd.command(context)
-    if (!command) {
-      setCommandRunning(false)
-      return
-    }
-
-    const cmdArray = Array.isArray(command) ? command : [command]
-    let wrappedCommands = cmdArray
-
-    // Wrap with writeable root if needed
-    if (cmd.needsWriteableRoot) {
-      wrappedCommands = CommandUtils.wrapWithWriteableRoot(cmdArray, device as DeviceType)
-    }
-
-    try {
-      for (const c of wrappedCommands) {
-        setMaintenanceOutput((prev) => prev + `$ ${c.script}\n`)
-        const success = await runScript(c.script)
-        if (!success) {
-          setMaintenanceOutput((prev) => prev + `Error executing: ${c.description}\n`)
-          break
-        }
-      }
-      setMaintenanceOutput((prev) => prev + '\n=== Command complete ===\n')
-    } catch (err) {
-      setMaintenanceOutput((prev) => prev + `\nError: ${err}\n`)
-    } finally {
-      setCommandRunning(false)
-      setCurrentRunningCommand(null)
-      setCommandContext(null)
-    }
+    setCommandRunning(false)
+    setCurrentRunningCommand(null)
+    setCommandContext(null)
   }
 
   const handleStopCommand = async () => {
@@ -575,13 +549,35 @@ export default function App() {
     setMaintenanceOutput((prev) => prev + '\n=== Command stopped ===\n')
   }
 
+  const getModalTitle = () => {
+    if (installing) return 'Installing Components'
+    if (uninstalling) return 'Removing Components'
+    if (commandRunning) return 'Running Maintenance'
+    return 'Operation Complete'
+  }
+
+  const getProgressText = () => {
+    if (progressModalType === 'install') {
+      if (installing || uninstalling) {
+        const action = installing ? 'Installing' : 'Removing'
+        return currentComponent
+          ? `${action} ${currentComponent} (${progressIndex + 1} of ${progressTotal})`
+          : `${action} components...`
+      }
+      return 'Installation complete!'
+    } else if (progressModalType === 'maintenance') {
+      return commandRunning ? 'Running command...' : 'Command complete!'
+    }
+    return ''
+  }
+
   return (
     <div className="min-h-screen p-6">
       <div className="max-w-4xl mx-auto space-y-6">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-bold text-foreground">Xovi Installer</h1>
-            <p className="text-muted-foreground">Install xovi and extensions on your reMarkable</p>
+            <h1 className="text-3xl font-bold text-foreground">reManager</h1>
+            <p className="text-muted-foreground">Manage xovi and extensions on your reMarkable</p>
           </div>
           {device && (
             <div className="flex items-center gap-2 text-sm">
@@ -736,7 +732,7 @@ export default function App() {
                   {modsView === 'install' && (
                     <div className="space-y-4">
                       <div className="grid grid-cols-2 gap-4">
-                        {COMPONENTS.map((comp) => {
+                        {components.map((comp) => {
                           const isSelected = selected.has(comp.id)
                           const isRequired = comp.id === 'xovi' && selected.size > 1 && !componentStatus['xovi']
 
@@ -795,28 +791,13 @@ export default function App() {
                           )}
                         </Button>
                       </div>
-
-                      {(installing || output) && (
-                        <div className="mt-4">
-                          <div className="h-[400px] rounded-lg overflow-hidden">
-                            <Terminal output={output} />
-                          </div>
-                          {!installing && output && (
-                            <div className="mt-4 flex justify-end gap-2">
-                              <Button onClick={() => { setOutput(''); setSelected(new Set()) }}>
-                                Install More
-                              </Button>
-                            </div>
-                          )}
-                        </div>
-                      )}
                     </div>
                   )}
 
                   {modsView === 'remove' && (
                     <div className="space-y-4">
                       <div className="grid grid-cols-2 gap-4">
-                        {COMPONENTS.filter(comp => componentStatus[comp.id]).map((comp) => {
+                        {components.filter(comp => componentStatus[comp.id]).map((comp) => {
                           const isSelected = selectedForRemoval.has(comp.id)
 
                           return (
@@ -845,13 +826,13 @@ export default function App() {
                         })}
                       </div>
 
-                      {COMPONENTS.filter(comp => componentStatus[comp.id]).length === 0 && (
+                      {components.filter(comp => componentStatus[comp.id]).length === 0 && (
                         <p className="text-center text-muted-foreground py-8">
                           No components installed
                         </p>
                       )}
 
-                      {COMPONENTS.filter(comp => componentStatus[comp.id]).length > 0 && (
+                      {components.filter(comp => componentStatus[comp.id]).length > 0 && (
                         <div className="pt-4 flex justify-end">
                           <Button
                             onClick={handleUninstall}
@@ -867,14 +848,6 @@ export default function App() {
                               `Remove ${selectedForRemoval.size} component${selectedForRemoval.size !== 1 ? 's' : ''}`
                             )}
                           </Button>
-                        </div>
-                      )}
-
-                      {(uninstalling || (maintenanceOutput && modsView === 'remove')) && (
-                        <div className="mt-4">
-                          <div className="h-[400px] rounded-lg overflow-hidden">
-                            <Terminal output={maintenanceOutput} />
-                          </div>
                         </div>
                       )}
                     </div>
@@ -929,17 +902,17 @@ export default function App() {
                     <CardDescription>Component-specific commands</CardDescription>
                   </CardHeader>
                   <CardContent>
-                    {COMPONENTS.filter(c => componentStatus[c.id] && c.maintenanceCommands && c.maintenanceCommands.length > 0).length === 0 ? (
+                    {components.filter(c => componentStatus[c.id] && maintenanceCommands[c.id]?.length > 0).length === 0 ? (
                       <p className="text-center text-muted-foreground py-4">
                         No installed components have maintenance commands
                       </p>
                     ) : (
                       <div className="space-y-4">
-                        {COMPONENTS.filter(c => componentStatus[c.id] && c.maintenanceCommands).map((component) => (
+                        {components.filter(c => componentStatus[c.id] && maintenanceCommands[c.id]).map((component) => (
                           <div key={component.id}>
                             <h4 className="font-medium mb-2">{component.name}</h4>
                             <div className="grid grid-cols-3 gap-2">
-                              {component.maintenanceCommands?.map((cmd) => {
+                              {maintenanceCommands[component.id]?.map((cmd) => {
                                 const isRunning = currentRunningCommand?.componentId === component.id &&
                                                  currentRunningCommand?.commandId === cmd.id
 
@@ -973,20 +946,6 @@ export default function App() {
                     )}
                   </CardContent>
                 </Card>
-
-                {/* Maintenance Output Terminal */}
-                {maintenanceOutput && activeTab === 'maintenance' && (
-                  <Card>
-                    <CardHeader>
-                      <CardTitle>Command Output</CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <div className="h-[400px] rounded-lg overflow-hidden">
-                        <Terminal output={maintenanceOutput} />
-                      </div>
-                    </CardContent>
-                  </Card>
-                )}
               </div>
             </TabsContent>
           </Tabs>
@@ -994,7 +953,7 @@ export default function App() {
       </div>
 
       {/* Overwrite Confirmation Dialog */}
-      <Dialog open={showOverwriteDialog} onOpenChange={setShowOverwriteDialog}>
+      <Dialog open={showOverwriteDialog} onOpenChange={setShowOverwriteDialog} className="z-[60]">
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
@@ -1006,7 +965,7 @@ export default function App() {
                 <p>The following components are already installed and will be re-installed:</p>
                 <ul className="list-disc list-inside space-y-1 text-sm">
                   {componentsToOverwrite.map(id => {
-                    const comp = COMPONENTS.find(c => c.id === id)
+                    const comp = components.find(c => c.id === id)
                     return <li key={id}>{comp?.name || id}</li>
                   })}
                 </ul>
@@ -1042,33 +1001,32 @@ export default function App() {
         </DialogContent>
       </Dialog>
 
-      {/* Rebuild Hashtable Dialog */}
-      <Dialog open={showRebuildDialog} onOpenChange={setShowRebuildDialog}>
+      {/* Hook Dialog (e.g., Rebuild Qt Resources) */}
+      <Dialog open={showRebuildDialog} onOpenChange={setShowRebuildDialog} className="z-[60]">
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <AlertTriangle className="h-5 w-5 text-yellow-500" />
-              {rebuildInProgress ? 'Rebuilding Qt Resources...' : 'Rebuild Qt Resources'}
+              {rebuildInProgress ? (dialogRequest?.inProgressMessage || 'Processing...') : (dialogRequest?.title || 'Confirmation Required')}
             </DialogTitle>
             <DialogDescription>
               {rebuildInProgress ? (
                 <div className="space-y-4 pt-4">
                   <div className="flex items-center gap-3">
                     <Loader2 className="h-5 w-5 animate-spin" />
-                    <span>Please enter your passcode on the tablet if prompted</span>
+                    <span>{dialogRequest?.inProgressMessage || 'Please wait...'}</span>
                   </div>
-                  <p className="text-sm">This may take up to 2 minutes. The tablet will restart twice.</p>
                 </div>
               ) : (
                 <div className="space-y-4 pt-4">
-                  <p>This process will:</p>
-                  <ol className="list-decimal list-inside space-y-1 text-sm">
-                    <li>Restart the tablet interface</li>
-                    <li>Ask for your passcode (if you have one set)</li>
-                    <li>Generate hashtable (~1 minute)</li>
-                    <li>Restart the tablet interface again</li>
-                  </ol>
-                  <p className="font-medium">Please keep your tablet nearby and ready to enter your passcode when prompted.</p>
+                  <p>{dialogRequest?.message}</p>
+                  {dialogRequest?.steps && dialogRequest.steps.length > 0 && (
+                    <ol className="list-decimal list-inside space-y-1 text-sm">
+                      {dialogRequest.steps.map((step, idx) => (
+                        <li key={idx}>{step}</li>
+                      ))}
+                    </ol>
+                  )}
                 </div>
               )}
             </DialogDescription>
@@ -1079,10 +1037,8 @@ export default function App() {
                 variant="outline"
                 onClick={() => {
                   setShowRebuildDialog(false)
-                  if (pendingRebuildCallback) {
-                    pendingRebuildCallback.reject(new Error('cancelled'))
-                    setPendingRebuildCallback(null)
-                  }
+                  setDialogRequest(null)
+                  window.go.main.App.RespondToDialog(false)
                 }}
               >
                 Cancel
@@ -1090,16 +1046,49 @@ export default function App() {
               <Button
                 onClick={() => {
                   setShowRebuildDialog(false)
-                  if (pendingRebuildCallback) {
-                    pendingRebuildCallback.resolve()
-                    setPendingRebuildCallback(null)
-                  }
+                  setRebuildInProgress(true)
+                  window.go.main.App.RespondToDialog(true)
                 }}
               >
-                Ready, Proceed
+                {dialogRequest?.confirmText || 'Proceed'}
               </Button>
             </DialogFooter>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Progress Modal */}
+      <Dialog
+        open={showProgressModal}
+        onOpenChange={(open) => {
+          if (!installing && !uninstalling && !commandRunning) {
+            setShowProgressModal(open)
+            if (!open) {
+              setProgressModalType(null)
+              setProgressIndex(0)
+              setProgressTotal(0)
+              setProgressPercentage(0)
+              setOutput('')
+              setMaintenanceOutput('')
+            }
+          }
+        }}
+        closable={!installing && !uninstalling && !commandRunning}
+      >
+        <DialogContent className="max-w-6xl w-full">
+          <ProgressModal
+            title={getModalTitle()}
+            progressText={getProgressText()}
+            percentage={progressPercentage}
+            terminalOutput={progressModalType === 'maintenance' ? maintenanceOutput : output}
+            isComplete={!installing && !uninstalling && !commandRunning}
+            onClose={() => {
+              setShowProgressModal(false)
+              setOutput('')
+              setMaintenanceOutput('')
+              setProgressModalType(null)
+            }}
+          />
         </DialogContent>
       </Dialog>
     </div>

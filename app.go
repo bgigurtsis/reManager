@@ -14,7 +14,18 @@ import (
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 	"golang.org/x/crypto/ssh"
+
+	"reManager/internal/commands"
+	"reManager/internal/component"
+	"reManager/internal/component/definitions"
+	"reManager/internal/device"
+	"reManager/internal/executor"
+	"reManager/internal/installer"
 )
+
+func init() {
+	definitions.RegisterAll(component.DefaultRegistry)
+}
 
 type App struct {
 	ctx            context.Context
@@ -25,6 +36,7 @@ type App struct {
 	commandCancel  context.CancelFunc
 	commandSession *ssh.Session
 	commandStdin   io.WriteCloser
+	dialogResponse chan bool
 }
 
 func NewApp() *App {
@@ -406,8 +418,8 @@ func (a *App) RunCommand(cmd string) string {
 	return output
 }
 
-func (a *App) RunCommandWithOutput(cmd string) {
-	fmt.Println("[DEBUG] RunCommandWithOutput called:", cmd[:min(50, len(cmd))])
+func (a *App) RunCommandWithOutput(cmd string, requiresPTY bool) {
+	fmt.Println("[DEBUG] RunCommandWithOutput called:", cmd[:min(50, len(cmd))], "requiresPTY:", requiresPTY)
 	go func() {
 		a.mu.Lock()
 
@@ -428,21 +440,21 @@ func (a *App) RunCommandWithOutput(cmd string) {
 			return
 		}
 
-		// Request PTY to enable signal handling (Ctrl+C via stdin)
-		// This allows StopCommand() to send \x03 which the terminal driver converts to SIGINT
-		err = session.RequestPty("xterm-256color", 40, 120, ssh.TerminalModes{
-			ssh.ECHO:          1,     // Enable echo
-			ssh.TTY_OP_ISPEED: 14400, // Input speed
-			ssh.TTY_OP_OSPEED: 14400, // Output speed
-		})
-		if err != nil {
-			a.mu.Unlock()
-			fmt.Println("[DEBUG] PTY request error:", err)
-			runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("Error requesting PTY: %v\n", err))
-			runtime.EventsEmit(a.ctx, "command:done", false)
-			return
+		if requiresPTY {
+			err = session.RequestPty("xterm-256color", 40, 120, ssh.TerminalModes{
+				ssh.ECHO:          1,
+				ssh.TTY_OP_ISPEED: 14400,
+				ssh.TTY_OP_OSPEED: 14400,
+			})
+			if err != nil {
+				a.mu.Unlock()
+				fmt.Println("[DEBUG] PTY request error:", err)
+				runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("Error requesting PTY: %v\n", err))
+				runtime.EventsEmit(a.ctx, "command:done", false)
+				return
+			}
+			fmt.Println("[DEBUG] PTY allocated successfully")
 		}
-		fmt.Println("[DEBUG] PTY allocated successfully")
 
 		// Store session and release lock immediately
 		a.commandSession = session
@@ -488,6 +500,10 @@ func (a *App) RunCommandWithOutput(cmd string) {
 			runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("Error: %v\n", err))
 			runtime.EventsEmit(a.ctx, "command:done", false)
 			return
+		}
+
+		if !requiresPTY {
+			stdin.Close()
 		}
 
 		go func() {
@@ -606,4 +622,356 @@ func (a *App) GetUpdateServiceStatus() UpdateServiceStatus {
 	}
 
 	return status
+}
+
+type ComponentInfo struct {
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	Description  string   `json:"description"`
+	Version      string   `json:"version"`
+	Author       string   `json:"author"`
+	Dependencies []string `json:"dependencies"`
+	Category     string   `json:"category"`
+	Tags         []string `json:"tags"`
+}
+
+func (a *App) GetComponents() []ComponentInfo {
+	components := component.DefaultRegistry.GetAll()
+	result := make([]ComponentInfo, len(components))
+
+	for i, comp := range components {
+		result[i] = ComponentInfo{
+			ID:           comp.ID,
+			Name:         comp.Name,
+			Description:  comp.Description,
+			Version:      comp.Version,
+			Author:       comp.Author,
+			Dependencies: comp.Dependencies,
+			Category:     comp.Category,
+			Tags:         comp.Tags,
+		}
+	}
+
+	return result
+}
+
+func (a *App) ResolveDependencies(componentIDs []string) ([]string, error) {
+	resolver := component.NewDependencyResolver(component.DefaultRegistry.GetAllAsMap())
+	return resolver.Resolve(componentIDs)
+}
+
+func (a *App) GetComponentDependents(componentID string) []string {
+	resolver := component.NewDependencyResolver(component.DefaultRegistry.GetAllAsMap())
+	return resolver.GetDependents(componentID)
+}
+
+type MaintenanceCommandInfo struct {
+	ID               string `json:"id"`
+	Label            string `json:"label"`
+	Description      string `json:"description"`
+	RequiresTerminal bool   `json:"requiresTerminal"`
+	AllowStop        bool   `json:"allowStop"`
+}
+
+func (a *App) GetMaintenanceCommands(componentID string) []MaintenanceCommandInfo {
+	comp := component.DefaultRegistry.Get(componentID)
+	if comp == nil {
+		return nil
+	}
+
+	result := make([]MaintenanceCommandInfo, len(comp.MaintenanceCommands))
+	for i, cmd := range comp.MaintenanceCommands {
+		result[i] = MaintenanceCommandInfo{
+			ID:               cmd.ID,
+			Label:            cmd.Label,
+			Description:      cmd.Description,
+			RequiresTerminal: cmd.RequiresTerminal,
+			AllowStop:        cmd.AllowStop,
+		}
+	}
+
+	return result
+}
+
+type SystemTaskInfo struct {
+	ID                 string `json:"id"`
+	Label              string `json:"label"`
+	Description        string `json:"description"`
+	RequiresTerminal   bool   `json:"requiresTerminal"`
+	NeedsWriteableRoot bool   `json:"needsWriteableRoot"`
+}
+
+func (a *App) GetSystemTasksInfo() []SystemTaskInfo {
+	result := make([]SystemTaskInfo, len(device.SystemTasks))
+	for i, task := range device.SystemTasks {
+		result[i] = SystemTaskInfo{
+			ID:                 task.ID,
+			Label:              task.Label,
+			Description:        task.Description,
+			RequiresTerminal:   task.RequiresTerminal,
+			NeedsWriteableRoot: task.NeedsWriteableRoot,
+		}
+	}
+	return result
+}
+
+func (a *App) GetDeviceDisplayName(machine string) string {
+	return device.GetDisplayName(machine)
+}
+
+func (a *App) GetDeviceArchitecture(deviceType string) string {
+	return string(device.GetArchitecture(component.DeviceType(deviceType)))
+}
+
+type InstallProgress struct {
+	Component string `json:"component"`
+	Index     int    `json:"index"`
+	Total     int    `json:"total"`
+	Status    string `json:"status"`
+	Message   string `json:"message"`
+}
+
+type InstallResult struct {
+	Success bool     `json:"success"`
+	Errors  []string `json:"errors"`
+}
+
+type DialogRequest struct {
+	Title             string   `json:"title"`
+	Message           string   `json:"message"`
+	Steps             []string `json:"steps"`
+	ConfirmText       string   `json:"confirmText"`
+	InProgressMessage string   `json:"inProgressMessage"`
+}
+
+func (a *App) RespondToDialog(confirmed bool) {
+	if a.dialogResponse != nil {
+		a.dialogResponse <- confirmed
+	}
+}
+
+func (a *App) InstallComponents(componentIDs []string, deviceType string) {
+	go func() {
+		a.dialogResponse = make(chan bool, 1)
+		defer func() {
+			close(a.dialogResponse)
+			a.dialogResponse = nil
+		}()
+
+		arch := device.GetArchitecture(component.DeviceType(deviceType))
+
+		// Get current component status
+		componentsStatus := make(map[string]bool)
+		for _, comp := range component.DefaultRegistry.GetAll() {
+			componentsStatus[comp.ID] = a.CheckComponentStatus(comp.ID)
+		}
+
+		ctx := component.CommandContext{
+			Arch:             arch,
+			Device:           component.DeviceType(deviceType),
+			IsInstalled:      false,
+			ComponentsStatus: componentsStatus,
+		}
+
+		// Create executor that emits events
+		exec := &wailsExecutor{app: a}
+
+		inst := installer.NewInstaller(component.DefaultRegistry, exec)
+
+		result := inst.Install(
+			componentIDs,
+			ctx,
+			func(progress executor.ProgressInfo) {
+				runtime.EventsEmit(a.ctx, "install:progress", InstallProgress{
+					Component: progress.CurrentComponent,
+					Index:     progress.CurrentIndex,
+					Total:     progress.TotalComponents,
+					Status:    string(progress.Status),
+					Message:   progress.Message,
+				})
+			},
+			func(hookResult *component.HookExecutionResult) error {
+				if hookResult.DialogConfig != nil {
+					runtime.EventsEmit(a.ctx, "hook:dialog", DialogRequest{
+						Title:             hookResult.DialogConfig.Title,
+						Message:           hookResult.DialogConfig.Message,
+						Steps:             hookResult.DialogConfig.Steps,
+						ConfirmText:       hookResult.DialogConfig.ConfirmText,
+						InProgressMessage: hookResult.DialogConfig.InProgressMessage,
+					})
+
+					confirmed := <-a.dialogResponse
+					if !confirmed {
+						return fmt.Errorf("user cancelled")
+					}
+
+					if hookResult.Command != nil {
+						runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("$ %s\n", hookResult.Command.Script))
+						if err := exec.Execute([]component.CommandResult{*hookResult.Command}); err != nil {
+							return err
+						}
+					}
+				}
+				return nil
+			},
+		)
+
+		runtime.EventsEmit(a.ctx, "install:complete", InstallResult{
+			Success: result.Success,
+			Errors:  result.Errors,
+		})
+	}()
+}
+
+func (a *App) UninstallComponents(componentIDs []string, deviceType string) {
+	go func() {
+		arch := device.GetArchitecture(component.DeviceType(deviceType))
+
+		componentsStatus := make(map[string]bool)
+		for _, comp := range component.DefaultRegistry.GetAll() {
+			componentsStatus[comp.ID] = a.CheckComponentStatus(comp.ID)
+		}
+
+		ctx := component.CommandContext{
+			Arch:             arch,
+			Device:           component.DeviceType(deviceType),
+			IsInstalled:      true,
+			ComponentsStatus: componentsStatus,
+		}
+
+		exec := &wailsExecutor{app: a}
+		inst := installer.NewInstaller(component.DefaultRegistry, exec)
+
+		result := inst.Uninstall(
+			componentIDs,
+			ctx,
+			func(progress executor.ProgressInfo) {
+				runtime.EventsEmit(a.ctx, "install:progress", InstallProgress{
+					Component: progress.CurrentComponent,
+					Index:     progress.CurrentIndex,
+					Total:     progress.TotalComponents,
+					Status:    string(progress.Status),
+					Message:   progress.Message,
+				})
+			},
+		)
+
+		runtime.EventsEmit(a.ctx, "install:complete", InstallResult{
+			Success: result.Success,
+			Errors:  result.Errors,
+		})
+	}()
+}
+
+func (a *App) RunMaintenanceCommand(componentID, commandID, deviceType string) {
+	go func() {
+		comp := component.DefaultRegistry.Get(componentID)
+		if comp == nil {
+			runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("Component not found: %s\n", componentID))
+			runtime.EventsEmit(a.ctx, "command:done", false)
+			return
+		}
+
+		var cmd *component.MaintenanceCommand
+		for i := range comp.MaintenanceCommands {
+			if comp.MaintenanceCommands[i].ID == commandID {
+				cmd = &comp.MaintenanceCommands[i]
+				break
+			}
+		}
+		if cmd == nil {
+			runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("Command not found: %s\n", commandID))
+			runtime.EventsEmit(a.ctx, "command:done", false)
+			return
+		}
+
+		arch := device.GetArchitecture(component.DeviceType(deviceType))
+		ctx := component.CommandContext{
+			Arch:             arch,
+			Device:           component.DeviceType(deviceType),
+			IsInstalled:      true,
+			ComponentsStatus: make(map[string]bool),
+		}
+
+		cmdResults := cmd.Command(ctx)
+
+		if cmd.NeedsWriteableRoot {
+			cmdResults = commands.WrapWithWriteableRoot(cmdResults, component.DeviceType(deviceType))
+		}
+
+		for _, c := range cmdResults {
+			runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("$ %s\n", c.Script))
+			a.RunCommandWithOutput(c.Script, c.RequiresPTY)
+		}
+	}()
+}
+
+func (a *App) RunSystemTask(taskID, deviceType string) {
+	go func() {
+		task := device.GetSystemTask(taskID)
+		if task == nil {
+			runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("Task not found: %s\n", taskID))
+			runtime.EventsEmit(a.ctx, "command:done", false)
+			return
+		}
+
+		arch := device.GetArchitecture(component.DeviceType(deviceType))
+		ctx := component.CommandContext{
+			Arch:             arch,
+			Device:           component.DeviceType(deviceType),
+			IsInstalled:      false,
+			ComponentsStatus: make(map[string]bool),
+		}
+
+		cmdResults := task.Command(ctx)
+
+		if task.NeedsWriteableRoot {
+			cmdResults = commands.WrapWithWriteableRoot(cmdResults, component.DeviceType(deviceType))
+		}
+
+		for _, c := range cmdResults {
+			runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("$ %s\n", c.Script))
+			a.RunCommandWithOutput(c.Script, c.RequiresPTY)
+		}
+	}()
+}
+
+type wailsExecutor struct {
+	app *App
+}
+
+func (e *wailsExecutor) Execute(cmds []component.CommandResult) error {
+	for _, cmd := range cmds {
+		runtime.EventsEmit(e.app.ctx, "command:output", fmt.Sprintf("$ %s\n", cmd.Script))
+
+		done := make(chan bool, 1)
+		unsub := runtime.EventsOn(e.app.ctx, "command:done", func(optionalData ...interface{}) {
+			if len(optionalData) > 0 {
+				if success, ok := optionalData[0].(bool); ok {
+					done <- success
+					return
+				}
+			}
+			done <- false
+		})
+
+		e.app.RunCommandWithOutput(cmd.Script, cmd.RequiresPTY)
+		success := <-done
+		unsub()
+
+		if !success {
+			return fmt.Errorf("command failed: %s", cmd.Description)
+		}
+	}
+	return nil
+}
+
+func (e *wailsExecutor) ExecuteWithOutput(cmd string) (string, error) {
+	e.app.mu.Lock()
+	defer e.app.mu.Unlock()
+	return e.app.runCommand(cmd)
+}
+
+func (e *wailsExecutor) ExecuteStreaming(cmd string, onOutput func(line string)) error {
+	return fmt.Errorf("streaming not implemented for wails executor")
 }

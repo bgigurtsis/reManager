@@ -5,18 +5,20 @@ interface DialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   children: React.ReactNode
+  closable?: boolean
+  className?: string
 }
 
-export function Dialog({ open, onOpenChange, children }: DialogProps) {
+export function Dialog({ open, onOpenChange, children, closable = true, className }: DialogProps) {
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
+    <div className={cn("fixed inset-0 z-50 flex items-center justify-center", className)}>
       <div
         className="fixed inset-0 bg-black/50"
-        onClick={() => onOpenChange(false)}
+        onClick={() => closable && onOpenChange(false)}
       />
-      <div className="relative z-50 w-full max-w-lg">{children}</div>
+      <div className="relative z-50 w-full px-4 flex justify-center">{children}</div>
     </div>
   )
 }
@@ -30,6 +32,7 @@ export function DialogContent({
     <div
       className={cn(
         "bg-card border rounded-lg shadow-lg p-6",
+        "max-w-lg",
         className
       )}
       {...props}
