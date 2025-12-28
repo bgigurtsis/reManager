@@ -82,7 +82,7 @@ var XoviComponent = &component.ComponentDefinition{
 	MaintenanceCommands: []component.MaintenanceCommand{
 		{
 			ID:          "start",
-			Label:       "Start Xovi",
+			Label:       "Xovi Start",
 			Description: "Start the xovi framework",
 			Command: func(ctx component.CommandContext) []component.CommandResult {
 				return []component.CommandResult{{Script: "/home/root/xovi/start", Description: "Start xovi"}}
@@ -90,7 +90,7 @@ var XoviComponent = &component.ComponentDefinition{
 		},
 		{
 			ID:               "debug",
-			Label:            "Debug Mode",
+			Label:            "Xovi Debug",
 			Description:      "Run xovi in debug mode with live output",
 			RequiresTerminal: true,
 			AllowStop:        true,
@@ -100,7 +100,7 @@ var XoviComponent = &component.ComponentDefinition{
 		},
 		{
 			ID:               "stock",
-			Label:            "Restore Stock",
+			Label:            "Xovi Stock",
 			Description:      "Restore device to stock remarkable software",
 			RequiresTerminal: true,
 			Command: func(ctx component.CommandContext) []component.CommandResult {
