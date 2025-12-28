@@ -39,16 +39,7 @@ func (i *Installer) Install(
 ) InstallResult {
 	var errors []string
 
-	resolver := component.NewDependencyResolver(i.registry.GetAllAsMap())
-	resolved, err := resolver.Resolve(componentIDs)
-	if err != nil {
-		return InstallResult{
-			Success: false,
-			Errors:  []string{err.Error()},
-		}
-	}
-
-	for idx, componentID := range resolved {
+	for idx, componentID := range componentIDs {
 		comp := i.registry.Get(componentID)
 		if comp == nil {
 			errors = append(errors, fmt.Sprintf("Component not found: %s", componentID))
@@ -61,7 +52,7 @@ func (i *Installer) Install(
 		if onProgress != nil {
 			onProgress(executor.ProgressInfo{
 				CurrentComponent: comp.Name,
-				TotalComponents:  len(resolved),
+				TotalComponents:  len(componentIDs),
 				CurrentIndex:     idx,
 				Status:           executor.StatusInstalling,
 				Message:          fmt.Sprintf("Installing %s...", comp.Name),
@@ -72,13 +63,13 @@ func (i *Installer) Install(
 			hookResult, err := comp.PreInstall.Execute(componentCtx)
 			if err != nil {
 				errors = append(errors, fmt.Sprintf("Pre-install hook failed for %s: %v", comp.Name, err))
-				reportError(onProgress, comp.Name, len(resolved), idx, errors[len(errors)-1])
+				reportError(onProgress, comp.Name, len(componentIDs), idx, errors[len(errors)-1])
 				continue
 			}
 			if hookResult != nil && onHook != nil {
 				if err := onHook(hookResult); err != nil {
 					errors = append(errors, fmt.Sprintf("Hook callback failed for %s: %v", comp.Name, err))
-					reportError(onProgress, comp.Name, len(resolved), idx, errors[len(errors)-1])
+					reportError(onProgress, comp.Name, len(componentIDs), idx, errors[len(errors)-1])
 					continue
 				}
 			}
@@ -88,7 +79,7 @@ func (i *Installer) Install(
 		if err := i.executor.Execute(commands); err != nil {
 			errMsg := fmt.Sprintf("Installation command failed for %s: %v", comp.Name, err)
 			errors = append(errors, errMsg)
-			reportError(onProgress, comp.Name, len(resolved), idx, errMsg)
+			reportError(onProgress, comp.Name, len(componentIDs), idx, errMsg)
 			continue
 		}
 
@@ -96,13 +87,13 @@ func (i *Installer) Install(
 			hookResult, err := comp.PostInstall.Execute(componentCtx)
 			if err != nil {
 				errors = append(errors, fmt.Sprintf("Post-install hook failed for %s: %v", comp.Name, err))
-				reportError(onProgress, comp.Name, len(resolved), idx, errors[len(errors)-1])
+				reportError(onProgress, comp.Name, len(componentIDs), idx, errors[len(errors)-1])
 				continue
 			}
 			if hookResult != nil && onHook != nil {
 				if err := onHook(hookResult); err != nil {
 					errors = append(errors, fmt.Sprintf("Hook callback failed for %s: %v", comp.Name, err))
-					reportError(onProgress, comp.Name, len(resolved), idx, errors[len(errors)-1])
+					reportError(onProgress, comp.Name, len(componentIDs), idx, errors[len(errors)-1])
 					continue
 				}
 			}
@@ -111,7 +102,7 @@ func (i *Installer) Install(
 		if onProgress != nil {
 			onProgress(executor.ProgressInfo{
 				CurrentComponent: comp.Name,
-				TotalComponents:  len(resolved),
+				TotalComponents:  len(componentIDs),
 				CurrentIndex:     idx,
 				Status:           executor.StatusCompleted,
 				Message:          fmt.Sprintf("%s installed successfully", comp.Name),

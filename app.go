@@ -21,6 +21,7 @@ import (
 	"reManager/internal/device"
 	"reManager/internal/executor"
 	"reManager/internal/installer"
+	"reManager/internal/storage"
 )
 
 func init() {
@@ -37,6 +38,7 @@ type App struct {
 	commandSession *ssh.Session
 	commandStdin   io.WriteCloser
 	dialogResponse chan bool
+	deviceStore    *storage.DeviceStore
 }
 
 func NewApp() *App {
@@ -45,6 +47,11 @@ func NewApp() *App {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	store, err := storage.NewDeviceStore()
+	if err != nil {
+		fmt.Printf("Warning: could not initialize device store: %v\n", err)
+	}
+	a.deviceStore = store
 }
 
 func (a *App) shutdown(ctx context.Context) {
@@ -93,6 +100,109 @@ func (a *App) SelectKeyFile() string {
 		return ""
 	}
 	return path
+}
+
+type SavedDeviceInfo struct {
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Host          string `json:"host"`
+	AuthType      string `json:"authType"`
+	KeyPath       string `json:"keyPath,omitempty"`
+	LastConnected int64  `json:"lastConnected,omitempty"`
+}
+
+func (a *App) GetSavedDevices() []SavedDeviceInfo {
+	if a.deviceStore == nil {
+		return []SavedDeviceInfo{}
+	}
+
+	devices, err := a.deviceStore.GetAll()
+	if err != nil {
+		fmt.Printf("Error getting saved devices: %v\n", err)
+		return []SavedDeviceInfo{}
+	}
+
+	result := make([]SavedDeviceInfo, len(devices))
+	for i, d := range devices {
+		result[i] = SavedDeviceInfo{
+			ID:            d.ID,
+			Name:          d.Name,
+			Host:          d.Host,
+			AuthType:      d.AuthType,
+			KeyPath:       d.KeyPath,
+			LastConnected: d.LastConnected,
+		}
+	}
+	return result
+}
+
+func (a *App) SaveDevice(id, name, host, authType, password, keyPath, keyPassphrase string) (string, error) {
+	if a.deviceStore == nil {
+		return "", fmt.Errorf("device store not initialized")
+	}
+
+	device := storage.SavedDevice{
+		ID:            id,
+		Name:          name,
+		Host:          host,
+		AuthType:      authType,
+		KeyPath:       keyPath,
+		LastConnected: time.Now().Unix(),
+	}
+
+	return a.deviceStore.Save(device, password, keyPassphrase)
+}
+
+func (a *App) DeleteSavedDevice(id string) error {
+	if a.deviceStore == nil {
+		return fmt.Errorf("device store not initialized")
+	}
+	return a.deviceStore.Delete(id)
+}
+
+func (a *App) UpdateDeviceName(id string, name string) error {
+	if a.deviceStore == nil {
+		return fmt.Errorf("device store not initialized")
+	}
+	return a.deviceStore.UpdateName(id, name)
+}
+
+func (a *App) ConnectToSavedDevice(id string) ConnectionResult {
+	if a.deviceStore == nil {
+		return ConnectionResult{
+			Success: false,
+			Message: "Device store not initialized",
+		}
+	}
+
+	device, err := a.deviceStore.Get(id)
+	if err != nil {
+		return ConnectionResult{
+			Success: false,
+			Message: fmt.Sprintf("Device not found: %v", err),
+		}
+	}
+
+	var result ConnectionResult
+	if device.AuthType == "key" {
+		passphrase, _ := a.deviceStore.GetKeyPassphrase(id)
+		result = a.ConnectWithAuth(device.Host, "key", passphrase, device.KeyPath)
+	} else {
+		password, err := a.deviceStore.GetPassword(id)
+		if err != nil {
+			return ConnectionResult{
+				Success: false,
+				Message: "Could not retrieve password. Please reconnect and save the device again.",
+			}
+		}
+		result = a.ConnectWithAuth(device.Host, "password", password, "")
+	}
+
+	if result.Success {
+		a.deviceStore.UpdateLastConnected(id, time.Now().Unix())
+	}
+
+	return result
 }
 
 func (a *App) CheckComponentStatus(componentID string) bool {

@@ -43,6 +43,15 @@ interface SSHKey {
   name: string
 }
 
+interface SavedDevice {
+  id: string
+  name: string
+  host: string
+  authType: 'password' | 'key'
+  keyPath?: string
+  lastConnected?: number
+}
+
 interface UpdateServiceStatus {
   enabled: boolean
   running: boolean
@@ -86,6 +95,11 @@ declare global {
           GetUpdateServiceStatus(): Promise<UpdateServiceStatus>
           GetDefaultSSHKeys(): Promise<SSHKey[]>
           SelectKeyFile(): Promise<string>
+          GetSavedDevices(): Promise<SavedDevice[]>
+          SaveDevice(id: string, name: string, host: string, authType: string, password: string, keyPath: string, keyPassphrase: string): Promise<string>
+          DeleteSavedDevice(id: string): Promise<void>
+          ConnectToSavedDevice(id: string): Promise<{ success: boolean; message: string; device?: string }>
+          UpdateDeviceName(id: string, name: string): Promise<void>
           CheckComponentStatus(componentId: string): Promise<boolean>
           GetComponents(): Promise<ComponentInfo[]>
           ResolveDependencies(componentIds: string[]): Promise<string[]>
@@ -163,6 +177,14 @@ export default function App() {
   const [systemTasks, setSystemTasks] = useState<SystemTaskInfo[]>([])
   const [maintenanceCommands, setMaintenanceCommands] = useState<Record<string, MaintenanceCommandInfo[]>>({})
 
+  const [savedDevices, setSavedDevices] = useState<SavedDevice[]>([])
+  const [showAddForm, setShowAddForm] = useState(false)
+  const [showSaveDeviceDialog, setShowSaveDeviceDialog] = useState(false)
+  const [deviceName, setDeviceName] = useState('')
+  const [deviceToDelete, setDeviceToDelete] = useState<string | null>(null)
+  const [editingDevice, setEditingDevice] = useState<SavedDevice | null>(null)
+  const [connectingDeviceId, setConnectingDeviceId] = useState<string | null>(null)
+
   useEffect(() => {
     commandContextRef.current = commandContext
   }, [commandContext])
@@ -170,10 +192,11 @@ export default function App() {
   useEffect(() => {
     const loadInitialData = async () => {
       try {
-        const [keys, comps, tasks] = await Promise.all([
+        const [keys, comps, tasks, devices] = await Promise.all([
           window.go.main.App.GetDefaultSSHKeys(),
           window.go.main.App.GetComponents(),
           window.go.main.App.GetSystemTasksInfo(),
+          window.go.main.App.GetSavedDevices(),
         ])
 
         setAvailableKeys(keys || [])
@@ -185,6 +208,7 @@ export default function App() {
 
         setComponents(comps || [])
         setSystemTasks(tasks || [])
+        setSavedDevices(devices || [])
       } catch (err) {
         console.log('Could not load initial data:', err)
         setSelectedKey('__other__')
@@ -211,6 +235,112 @@ export default function App() {
       setSelectedKey(value)
       setCustomKeyName('')
     }
+  }
+
+  const handleConnectToSavedDevice = async (id: string) => {
+    const thisAttempt = ++connectAttemptRef.current
+    setConnecting(true)
+    setConnectingDeviceId(id)
+    setError('')
+
+    try {
+      const result = await window.go.main.App.ConnectToSavedDevice(id)
+
+      if (thisAttempt !== connectAttemptRef.current) return
+
+      if (result.success) {
+        const info = await window.go.main.App.GetDeviceInfo()
+        setDevice(result.device || 'unknown')
+        setDeviceInfo(info)
+
+        const status: Record<string, boolean> = {}
+        const maintCmds: Record<string, MaintenanceCommandInfo[]> = {}
+        for (const comp of components) {
+          status[comp.id] = await window.go.main.App.CheckComponentStatus(comp.id)
+          const cmds = await window.go.main.App.GetMaintenanceCommands(comp.id)
+          if (cmds && cmds.length > 0) {
+            maintCmds[comp.id] = cmds
+          }
+        }
+        setComponentStatus(status)
+        setMaintenanceCommands(maintCmds)
+        setStep('select')
+      } else {
+        setError(result.message)
+      }
+    } catch (err) {
+      if (thisAttempt !== connectAttemptRef.current) return
+      setError(String(err))
+    } finally {
+      if (thisAttempt === connectAttemptRef.current) {
+        setConnecting(false)
+        setConnectingDeviceId(null)
+      }
+    }
+  }
+
+  const handleDeleteClick = (id: string) => {
+    setDeviceToDelete(id)
+  }
+
+  const handleConfirmDelete = async () => {
+    if (!deviceToDelete) return
+    try {
+      await window.go.main.App.DeleteSavedDevice(deviceToDelete)
+      setSavedDevices(prev => prev.filter(d => d.id !== deviceToDelete))
+    } catch (err) {
+      console.error('Failed to delete saved device:', err)
+    }
+    setDeviceToDelete(null)
+  }
+
+  const handleEditDevice = (device: SavedDevice) => {
+    setEditingDevice(device)
+    setDeviceName(device.name)
+    setHost(device.host)
+    setAuthType(device.authType)
+    if (device.authType === 'key' && device.keyPath) {
+      setSelectedKey(device.keyPath)
+    }
+    setShowAddForm(true)
+  }
+
+  const handleSaveEditedDevice = async () => {
+    if (!editingDevice) return
+    try {
+      const pw = authType === 'password' ? password : ''
+      const kp = authType === 'key' ? selectedKey : ''
+      const kpp = authType === 'key' ? keyPassphrase : ''
+
+      await window.go.main.App.SaveDevice(editingDevice.id, deviceName, host, authType, pw, kp, kpp)
+
+      const devices = await window.go.main.App.GetSavedDevices()
+      setSavedDevices(devices || [])
+
+      setEditingDevice(null)
+      setShowAddForm(false)
+      resetFormFields()
+    } catch (err) {
+      console.error('Failed to save device:', err)
+    }
+  }
+
+  const handleCancelForm = () => {
+    setShowAddForm(false)
+    setEditingDevice(null)
+    resetFormFields()
+  }
+
+  const resetFormFields = () => {
+    setHost('10.11.99.1')
+    setAuthType('password')
+    setPassword('')
+    setKeyPassphrase('')
+    setDeviceName('')
+    if (availableKeys.length > 0) {
+      setSelectedKey(availableKeys[0].path)
+    }
+    setError('')
   }
 
   useEffect(() => {
@@ -290,6 +420,7 @@ export default function App() {
       setCommandContext(null)
       setRebuildInProgress(false)
       setDialogRequest(null)
+      setSelected(new Set())
     })
 
     const unsubscribeDialog = window.runtime.EventsOn('hook:dialog', (...args: unknown[]) => {
@@ -308,7 +439,7 @@ export default function App() {
     }
   }, [])
 
-  const handleConnect = async () => {
+  const handleConnect = async (saveAfterConnect: boolean) => {
     const thisAttempt = ++connectAttemptRef.current
     setConnecting(true)
     setError('')
@@ -321,7 +452,6 @@ export default function App() {
         result = await window.go.main.App.Connect(host, password)
       }
 
-      // Check if this attempt was cancelled
       if (thisAttempt !== connectAttemptRef.current) {
         return
       }
@@ -343,7 +473,14 @@ export default function App() {
         setComponentStatus(status)
         setMaintenanceCommands(maintCmds)
 
+        if (saveAfterConnect) {
+          const displayName = getDisplayName(info.machine || '')
+          setDeviceName(displayName || host)
+          setShowSaveDeviceDialog(true)
+        }
+
         setStep('select')
+        setShowAddForm(false)
       } else {
         setError(result.message)
       }
@@ -356,6 +493,23 @@ export default function App() {
       if (thisAttempt === connectAttemptRef.current) {
         setConnecting(false)
       }
+    }
+  }
+
+  const handleSaveDevice = async () => {
+    try {
+      const pw = authType === 'password' ? password : ''
+      const kp = authType === 'key' ? selectedKey : ''
+      const kpp = authType === 'key' ? keyPassphrase : ''
+
+      await window.go.main.App.SaveDevice('', deviceName, host, authType, pw, kp, kpp)
+
+      const devices = await window.go.main.App.GetSavedDevices()
+      setSavedDevices(devices || [])
+
+      setShowSaveDeviceDialog(false)
+    } catch (err) {
+      console.error('Failed to save device:', err)
     }
   }
 
@@ -481,8 +635,10 @@ export default function App() {
 
   const rescanAllComponents = async () => {
     try {
+      const freshComponents = await window.go.main.App.GetComponents()
+
       const status: Record<string, boolean> = {}
-      for (const comp of components) {
+      for (const comp of freshComponents) {
         status[comp.id] = await window.go.main.App.CheckComponentStatus(comp.id)
       }
       setComponentStatus(status)
@@ -597,106 +753,199 @@ export default function App() {
         </div>
 
         {step === 'connect' && (
-          <Card>
-            <CardHeader>
-              <CardTitle>Connect to your reMarkable</CardTitle>
-              <CardDescription>
-                Find your IP and password in Settings → General → Help → Copyrights and licenses
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="host">IP Address</Label>
-                <Input
-                  id="host"
-                  value={host}
-                  onChange={(e) => setHost(e.target.value)}
-                  placeholder="10.11.99.1"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label>Authentication</Label>
-                <RadioGroup
-                  value={authType}
-                  onValueChange={(value) => setAuthType(value as 'password' | 'key')}
-                  className="flex gap-4"
+          <>
+            {/* Show saved devices list OR add form */}
+            {savedDevices.length > 0 && !showAddForm ? (
+              <div className="space-y-4">
+                {savedDevices.map((savedDevice) => (
+                  <Card key={savedDevice.id}>
+                    <CardContent className="pt-6">
+                      <div className="flex items-center justify-between">
+                        <div className="space-y-1">
+                          <h3 className="font-semibold text-lg">{savedDevice.name}</h3>
+                          <p className="text-sm text-muted-foreground">{savedDevice.host}</p>
+                        </div>
+                        <div className="flex gap-2">
+                          <Button
+                            variant="outline"
+                            onClick={() => handleEditDevice(savedDevice)}
+                            disabled={connecting}
+                          >
+                            Edit
+                          </Button>
+                          <Button
+                            variant="outline"
+                            onClick={() => handleDeleteClick(savedDevice.id)}
+                            disabled={connecting}
+                          >
+                            Remove
+                          </Button>
+                          <Button
+                            onClick={() => handleConnectToSavedDevice(savedDevice.id)}
+                            disabled={connecting}
+                          >
+                            {connecting && connectingDeviceId === savedDevice.id ? (
+                              <>
+                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                Connecting...
+                              </>
+                            ) : (
+                              'Connect'
+                            )}
+                          </Button>
+                        </div>
+                      </div>
+                      {error && connectingDeviceId === savedDevice.id && (
+                        <p className="text-sm text-destructive mt-2">{error}</p>
+                      )}
+                    </CardContent>
+                  </Card>
+                ))}
+                <Button
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => setShowAddForm(true)}
                 >
-                  <div className="flex items-center gap-2">
-                    <RadioGroupItem value="password" id="auth-password" />
-                    <Label htmlFor="auth-password" className="cursor-pointer font-normal">Password</Label>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <RadioGroupItem value="key" id="auth-key" />
-                    <Label htmlFor="auth-key" className="cursor-pointer font-normal">
-                      SSH Key
-                    </Label>
-                  </div>
-                </RadioGroup>
+                  Add reMarkable
+                </Button>
               </div>
-
-              {authType === 'password' ? (
-                <div className="space-y-2">
-                  <Label htmlFor="password">SSH Password</Label>
-                  <Input
-                    id="password"
-                    type="password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="Enter SSH password"
-                  />
-                </div>
-              ) : (
-                <>
-                  <div className="space-y-2">
-                    <Label htmlFor="sshKey">SSH Key</Label>
-                    <Select value={selectedKey} onValueChange={handleKeySelect}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select a key">
-                          {customKeyName || availableKeys.find(k => k.path === selectedKey)?.name || 'Select a key'}
-                        </SelectValue>
-                      </SelectTrigger>
-                      <SelectContent>
-                        {availableKeys.map((key) => (
-                          <SelectItem key={key.path} value={key.path}>
-                            {key.name}
-                          </SelectItem>
-                        ))}
-                        <SelectItem value="__other__">Other...</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="keyPassphrase">Key Passphrase (if encrypted)</Label>
+            ) : (
+              <Card>
+                <CardHeader>
+                  {editingDevice ? (
                     <Input
-                      id="keyPassphrase"
-                      type="password"
-                      value={keyPassphrase}
-                      onChange={(e) => setKeyPassphrase(e.target.value)}
-                      placeholder="Leave empty if not encrypted"
+                      value={deviceName}
+                      onChange={(e) => setDeviceName(e.target.value)}
+                      placeholder="Device Name"
+                      className="text-2xl font-semibold h-auto py-1 px-2 -mx-2"
+                    />
+                  ) : (
+                    <CardTitle>Connect to reMarkable</CardTitle>
+                  )}
+                  <CardDescription>
+                    Find your IP and password in Settings - General - Help - Copyrights and licenses
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="host">IP Address</Label>
+                    <Input
+                      id="host"
+                      value={host}
+                      onChange={(e) => setHost(e.target.value)}
+                      placeholder="10.11.99.1"
                     />
                   </div>
-                </>
-              )}
 
-              {error && <p className="text-sm text-destructive">{error}</p>}
-              <div className="flex justify-end">
-                {connecting ? (
-                  <Button onClick={handleCancelConnect} variant="outline">
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Cancel
-                  </Button>
-                ) : (
-                  <Button
-                    onClick={handleConnect}
-                    disabled={authType === 'password' ? !password : !selectedKey || selectedKey === '__other__'}
-                  >
-                    Connect
-                  </Button>
-                )}
-              </div>
-            </CardContent>
-          </Card>
+                  <div className="space-y-2">
+                    <Label>Authentication</Label>
+                    <RadioGroup
+                      value={authType}
+                      onValueChange={(value) => setAuthType(value as 'password' | 'key')}
+                      className="flex gap-4"
+                    >
+                      <div className="flex items-center gap-2">
+                        <RadioGroupItem value="password" id="auth-password" />
+                        <Label htmlFor="auth-password" className="cursor-pointer font-normal">Password</Label>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <RadioGroupItem value="key" id="auth-key" />
+                        <Label htmlFor="auth-key" className="cursor-pointer font-normal">
+                          SSH Key
+                        </Label>
+                      </div>
+                    </RadioGroup>
+                  </div>
+
+                  {authType === 'password' ? (
+                    <div className="space-y-2">
+                      <Label htmlFor="password">SSH Password</Label>
+                      <Input
+                        id="password"
+                        type="password"
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        placeholder="Enter SSH password"
+                      />
+                    </div>
+                  ) : (
+                    <>
+                      <div className="space-y-2">
+                        <Label htmlFor="sshKey">SSH Key</Label>
+                        <Select value={selectedKey} onValueChange={handleKeySelect}>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select a key">
+                              {customKeyName || availableKeys.find(k => k.path === selectedKey)?.name || 'Select a key'}
+                            </SelectValue>
+                          </SelectTrigger>
+                          <SelectContent>
+                            {availableKeys.map((key) => (
+                              <SelectItem key={key.path} value={key.path}>
+                                {key.name}
+                              </SelectItem>
+                            ))}
+                            <SelectItem value="__other__">Other...</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="keyPassphrase">Key Passphrase (if encrypted)</Label>
+                        <Input
+                          id="keyPassphrase"
+                          type="password"
+                          value={keyPassphrase}
+                          onChange={(e) => setKeyPassphrase(e.target.value)}
+                          placeholder="Leave empty if not encrypted"
+                        />
+                      </div>
+                    </>
+                  )}
+
+                  {error && <p className="text-sm text-destructive">{error}</p>}
+                  <div className="flex justify-between">
+                    <div>
+                      {savedDevices.length > 0 && (
+                        <Button variant="outline" onClick={handleCancelForm} disabled={connecting}>
+                          Cancel
+                        </Button>
+                      )}
+                    </div>
+                    <div className="flex gap-2">
+                      {connecting ? (
+                        <Button onClick={handleCancelConnect} variant="outline">
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Cancel
+                        </Button>
+                      ) : editingDevice ? (
+                        <Button
+                          onClick={handleSaveEditedDevice}
+                          disabled={!deviceName.trim() || (authType === 'password' ? !password : !selectedKey || selectedKey === '__other__')}
+                        >
+                          Save
+                        </Button>
+                      ) : (
+                        <>
+                          <Button
+                            variant="outline"
+                            onClick={() => handleConnect(false)}
+                            disabled={authType === 'password' ? !password : !selectedKey || selectedKey === '__other__'}
+                          >
+                            Connect
+                          </Button>
+                          <Button
+                            onClick={() => handleConnect(true)}
+                            disabled={authType === 'password' ? !password : !selectedKey || selectedKey === '__other__'}
+                          >
+                            Save and Connect
+                          </Button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+          </>
         )}
 
         {step !== 'connect' && (
@@ -1089,6 +1338,60 @@ export default function App() {
               setProgressModalType(null)
             }}
           />
+        </DialogContent>
+      </Dialog>
+
+      {/* Remove Confirmation Dialog */}
+      <Dialog open={deviceToDelete !== null} onOpenChange={(open) => !open && setDeviceToDelete(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Remove "{savedDevices.find(d => d.id === deviceToDelete)?.name}"?</DialogTitle>
+            <DialogDescription>
+              This will remove the saved connection and credentials.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeviceToDelete(null)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={handleConfirmDelete}>
+              Remove
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Save Device Dialog */}
+      <Dialog open={showSaveDeviceDialog} onOpenChange={setShowSaveDeviceDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Save Device</DialogTitle>
+            <DialogDescription>
+              Save this device for quick reconnection in the future. Your credentials will be stored securely.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="deviceName">Device Name</Label>
+              <Input
+                id="deviceName"
+                value={deviceName}
+                onChange={(e) => setDeviceName(e.target.value)}
+                placeholder={getDisplayName(deviceInfo.machine || '') || 'My reMarkable'}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setShowSaveDeviceDialog(false)}
+            >
+              Skip
+            </Button>
+            <Button onClick={handleSaveDevice} disabled={!deviceName.trim()}>
+              Save Device
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
