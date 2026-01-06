@@ -15,7 +15,7 @@ export function Dialog({ open, onOpenChange, children, closable = true, classNam
   return (
     <div className={cn("fixed inset-0 z-50 flex items-center justify-center", className)}>
       <div
-        className="fixed inset-0 bg-black/50"
+        className="fixed inset-0 bg-black/50 backdrop-blur-sm md:backdrop-blur-[1px]"
         onClick={() => closable && onOpenChange(false)}
       />
       <div className="relative z-50 w-full px-4 flex justify-center">{children}</div>

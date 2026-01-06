@@ -45,21 +45,22 @@ func NewProxy(client *Client, sshClient *ssh.Client, arch string) *Proxy {
 	}
 }
 
-// ProxyDownload downloads APKINDEX and packages, uploads them to device cache
-func (p *Proxy) ProxyDownload(packages []string, onProgress func(string)) error {
+// ProxyDownload downloads APKINDEX and packages, uploads them to device cache.
+// Returns the list of all package names that will be installed (including dependencies).
+func (p *Proxy) ProxyDownload(packages []string, onProgress func(string)) ([]string, error) {
 	onProgress("Downloading package index...")
 
 	// 1. Download and parse APKINDEX
 	apkindexURL := fmt.Sprintf("%s/%s/APKINDEX.tar.gz", VellumRepoBaseURL, p.arch)
 	apkindexData, err := downloadFile(apkindexURL)
 	if err != nil {
-		return fmt.Errorf("failed to download APKINDEX: %w", err)
+		return nil, fmt.Errorf("failed to download APKINDEX: %w", err)
 	}
 
 	// Parse APKINDEX to get C: fields
 	checksums, err := parseAPKINDEX(apkindexData)
 	if err != nil {
-		return fmt.Errorf("failed to parse APKINDEX: %w", err)
+		return nil, fmt.Errorf("failed to parse APKINDEX: %w", err)
 	}
 
 	// 2. Upload APKINDEX to device cache
@@ -68,17 +69,29 @@ func (p *Proxy) ProxyDownload(packages []string, onProgress func(string)) error 
 	onProgress(fmt.Sprintf("Uploading %s...", apkindexCacheName))
 
 	if err := p.uploadToDevice(apkindexData, remotePath); err != nil {
-		return fmt.Errorf("failed to upload APKINDEX: %w", err)
+		return nil, fmt.Errorf("failed to upload APKINDEX: %w", err)
 	}
 
-	// 3. Get download URLs from vellum
+	// 3. Simulate to get only packages that will actually be installed
 	onProgress("Resolving dependencies...")
-	urls, err := p.client.FetchURLs(packages...)
+	toInstall, err := p.client.SimulateAdd(packages...)
 	if err != nil {
-		return fmt.Errorf("failed to get package URLs: %w", err)
+		return nil, fmt.Errorf("failed to simulate install: %w", err)
 	}
 
-	// 4. Download and upload each package
+	// If nothing to install, return early
+	if len(toInstall) == 0 {
+		onProgress("All packages already installed")
+		return nil, nil
+	}
+
+	// 4. Get download URLs only for packages that need to be installed
+	urls, err := p.client.FetchURLs(toInstall...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get package URLs: %w", err)
+	}
+
+	// 5. Download and upload each package
 	for _, url := range urls {
 		// Skip local paths (not https://)
 		if !strings.HasPrefix(url, "https://") {
@@ -95,13 +108,13 @@ func (p *Proxy) ProxyDownload(packages []string, onProgress func(string)) error 
 		// Download the package
 		pkgData, err := downloadFile(url)
 		if err != nil {
-			return fmt.Errorf("failed to download %s: %w", pkgName, err)
+			return nil, fmt.Errorf("failed to download %s: %w", pkgName, err)
 		}
 
 		// Compute cache filename
 		cField, ok := checksums[pkgName]
 		if !ok {
-			return fmt.Errorf("checksum not found for package: %s", pkgName)
+			return nil, fmt.Errorf("checksum not found for package: %s", pkgName)
 		}
 		hash8 := computePackageHash(cField)
 		cacheFilename := fmt.Sprintf("%s-%s.%s.apk", pkgName, pkgVersion, hash8)
@@ -111,12 +124,12 @@ func (p *Proxy) ProxyDownload(packages []string, onProgress func(string)) error 
 		onProgress(fmt.Sprintf("Uploading %s...", cacheFilename))
 
 		if err := p.uploadToDevice(pkgData, remotePath); err != nil {
-			return fmt.Errorf("failed to upload %s: %w", pkgName, err)
+			return nil, fmt.Errorf("failed to upload %s: %w", pkgName, err)
 		}
 	}
 
 	onProgress("All packages downloaded and cached")
-	return nil
+	return toInstall, nil
 }
 
 func (p *Proxy) uploadToDevice(data []byte, remotePath string) error {

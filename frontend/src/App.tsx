@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -7,9 +7,12 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
+import { Sheet, SheetContent } from '@/components/ui/sheet'
 import { ProgressModal } from '@/components/ProgressModal'
+import { PackageDetailPanel } from '@/components/PackageDetailPanel'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
-import { Loader2, Unplug, Check, AlertTriangle, Trash2, Plus, X } from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
+import { Loader2, Unplug, Check, AlertTriangle, Trash2, Plus, X, Search, ChevronDown } from 'lucide-react'
 
 interface PackageInfo {
   name: string
@@ -82,6 +85,17 @@ interface DialogRequest {
   inProgressMessage: string
 }
 
+interface InstallSimulationResult {
+  packages: string[]
+  requested: string[]
+}
+
+interface UninstallSimulationResult {
+  packages: string[]
+  blocked: Record<string, string[]> | null
+  recursivePackages: string[] | null
+}
+
 declare global {
   interface Window {
     go: {
@@ -115,6 +129,8 @@ declare global {
           GetDeviceArchitecture(deviceType: string): Promise<string>
           InstallPackages(packageNames: string[], deviceType: string): Promise<void>
           UninstallPackages(packageNames: string[], deviceType: string): Promise<void>
+          SimulateInstall(packageNames: string[], deviceType: string): Promise<InstallSimulationResult>
+          SimulateUninstall(packageNames: string[]): Promise<UninstallSimulationResult>
           RunMaintenanceCommand(pkgName: string, commandId: string, deviceType: string): Promise<void>
           RunSystemTask(taskId: string, deviceType: string): Promise<void>
           RespondToDialog(confirmed: boolean): Promise<void>
@@ -123,6 +139,7 @@ declare global {
     }
     runtime: {
       EventsOn(eventName: string, callback: (...args: unknown[]) => void): () => void
+      BrowserOpenURL(url: string): void
     }
   }
 }
@@ -198,6 +215,60 @@ export default function App() {
   const [editingDevice, setEditingDevice] = useState<SavedDevice | null>(null)
   const [connectingDeviceId, setConnectingDeviceId] = useState<string | null>(null)
   const [queueError, setQueueError] = useState<string | null>(null)
+  const [lastInstallSuccess, setLastInstallSuccess] = useState<boolean | null>(null)
+  const [lastOperationType, setLastOperationType] = useState<'install' | 'uninstall' | null>(null)
+  const [installedExpanded, setInstalledExpanded] = useState(true)
+  const [availableExpanded, setAvailableExpanded] = useState(true)
+  const [selectedPackage, setSelectedPackage] = useState<PackageInfo | null>(null)
+  const [installQueueExpanded, setInstallQueueExpanded] = useState(false)
+  const [uninstallQueueExpanded, setUninstallQueueExpanded] = useState(false)
+  const [pendingInstallConfirm, setPendingInstallConfirm] = useState<{
+    packages: string[]
+    requested: string[]
+  } | null>(null)
+  const [pendingUninstallConfirm, setPendingUninstallConfirm] = useState<{
+    selected: string[]
+    packages: string[]
+    blocked: Record<string, string[]> | null
+    useRecursive: boolean
+  } | null>(null)
+  const [simulatingInstall, setSimulatingInstall] = useState(false)
+  const [simulatingUninstall, setSimulatingUninstall] = useState(false)
+
+  // Filter state for mod list
+  const [search, setSearch] = useState('')
+  const [categoryFilter, setCategoryFilter] = useState('all')
+
+  // Memoized sorted and filtered packages
+  const categories = useMemo(() => {
+    const cats = new Set(packages.map(p => p.category).filter(Boolean))
+    return Array.from(cats).sort()
+  }, [packages])
+
+  const filteredPackages = useMemo(() => {
+    return [...packages]
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+      .filter(pkg => {
+        if (search && !pkg.name.toLowerCase().includes(search.toLowerCase()) &&
+            !pkg.description.toLowerCase().includes(search.toLowerCase())) {
+          return false
+        }
+        if (categoryFilter !== 'all' && pkg.category !== categoryFilter) {
+          return false
+        }
+        return true
+      })
+  }, [packages, search, categoryFilter])
+
+  const installedFiltered = useMemo(() =>
+    filteredPackages.filter(pkg => installedPackages.has(pkg.name)),
+    [filteredPackages, installedPackages]
+  )
+
+  const availableFiltered = useMemo(() =>
+    filteredPackages.filter(pkg => !installedPackages.has(pkg.name)),
+    [filteredPackages, installedPackages]
+  )
 
   useEffect(() => {
     commandContextRef.current = commandContext
@@ -206,12 +277,14 @@ export default function App() {
   useEffect(() => {
     const loadInitialData = async () => {
       try {
+        console.log('[DEBUG] loadInitialData: starting')
         const [keys, pkgs, tasks, devices] = await Promise.all([
           window.go.main.App.GetDefaultSSHKeys(),
           window.go.main.App.GetPackages(),
           window.go.main.App.GetSystemTasksInfo(),
           window.go.main.App.GetSavedDevices(),
         ])
+        console.log('[DEBUG] loadInitialData: got pkgs', pkgs?.length, pkgs)
 
         setAvailableKeys(keys || [])
         if (keys && keys.length > 0) {
@@ -394,14 +467,10 @@ export default function App() {
       setCurrentComponent(progress.component)
       setProgressTotal(progress.total)
 
-      // Update progress bar only when components complete
+      setProgressIndex(progress.index)
       if (progress.status === 'completed') {
         const completedCount = progress.index + 1
-        setProgressIndex(completedCount)
         setProgressPercentage(Math.round((completedCount / progress.total) * 100))
-      } else {
-        // For installing/error states, just update the index for display
-        setProgressIndex(progress.index)
       }
 
       if (progress.status === 'installing') {
@@ -417,9 +486,10 @@ export default function App() {
       const result = args[0] as InstallResult
       console.log('Received install:complete:', result)
 
+      setLastInstallSuccess(result.success)
+
       if (result.success) {
-        setOutput((prev) => prev + '\n=== Installation complete! ===\n')
-        setOutput((prev) => prev + 'Run xovi/start or triple-tap the power button to start xovi.\n')
+        setOutput((prev) => prev + '\n=== Operation complete! ===\n')
         setProgressPercentage(100)
       } else {
         setOutput((prev) => prev + `\nErrors occurred:\n${result.errors.join('\n')}\n`)
@@ -588,6 +658,24 @@ export default function App() {
     return machine
   }
 
+  const getConflict = (pkg: PackageInfo): string | null => {
+    for (const conflict of pkg.conflicts) {
+      if (installedPackages.has(conflict)) {
+        return `Conflicts with installed: ${conflict}`
+      }
+      if (installQueue.has(conflict)) {
+        return `Conflicts with queued: ${conflict}`
+      }
+    }
+    for (const queuedName of installQueue) {
+      const queuedPkg = packages.find(p => p.name === queuedName)
+      if (queuedPkg?.conflicts.includes(pkg.name)) {
+        return `Conflicts with queued: ${queuedName}`
+      }
+    }
+    return null
+  }
+
   const addToQueue = (name: string) => {
     if (uninstallQueue.has(name)) {
       setQueueError(`Cannot add — ${name} is queued for removal`)
@@ -626,10 +714,8 @@ export default function App() {
     setInstallQueue(new Set())
   }
 
-  const handleInstallQueue = async () => {
-    if (installQueue.size === 0) return
-
-    const toInstall = Array.from(installQueue).filter((name) => !installedPackages.has(name))
+  const handleInstallQueue = async (allPackages?: string[]) => {
+    const toInstall = allPackages || Array.from(installQueue).filter((name) => !installedPackages.has(name))
 
     if (toInstall.length === 0) {
       setInstallQueue(new Set())
@@ -644,6 +730,7 @@ export default function App() {
     setInstalling(true)
     setOutput('')
     setCommandContext('install')
+    setLastOperationType('install')
 
     await window.go.main.App.InstallPackages(toInstall, device)
     setInstallQueue(new Set())
@@ -687,10 +774,13 @@ export default function App() {
     setUninstallQueue(new Set())
   }
 
-  const handleUninstallQueue = async () => {
-    if (uninstallQueue.size === 0) return
+  const handleUninstallQueue = async (allPackages?: string[]) => {
+    const toUninstall = allPackages || Array.from(uninstallQueue)
 
-    const toUninstall = Array.from(uninstallQueue)
+    if (toUninstall.length === 0) {
+      setUninstallQueue(new Set())
+      return
+    }
 
     setShowProgressModal(true)
     setProgressModalType('install')
@@ -700,6 +790,7 @@ export default function App() {
     setUninstalling(true)
     setMaintenanceOutput('')
     setCommandContext('maintenance')
+    setLastOperationType('uninstall')
 
     await window.go.main.App.UninstallPackages(toUninstall, device)
     setUninstallQueue(new Set())
@@ -787,7 +878,10 @@ export default function App() {
           ? `${action} ${currentComponent} (${progressIndex + 1} of ${progressTotal})`
           : `${action} components...`
       }
-      return 'Installation complete!'
+      const action = lastOperationType === 'uninstall' ? 'Removal' : 'Installation'
+      return lastInstallSuccess === false
+        ? `${action} failed`
+        : `${action} complete!`
     } else if (progressModalType === 'maintenance') {
       return commandRunning ? 'Running command...' : 'Command complete!'
     }
@@ -796,11 +890,11 @@ export default function App() {
 
   return (
     <div className="min-h-screen p-6">
-      <div className="max-w-4xl mx-auto space-y-6">
+      <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-3xl font-bold text-foreground">reManager</h1>
-            <p className="text-muted-foreground">Manage xovi and extensions on your reMarkable</p>
+            <p className="text-muted-foreground">Manage packages on your reMarkable</p>
           </div>
           {device && (
             <div className="flex items-center gap-2 text-sm">
@@ -1023,138 +1117,180 @@ export default function App() {
             </TabsList>
 
             <TabsContent value="mods">
-              <Card>
-                <CardHeader>
-                  <CardTitle>Mod Management</CardTitle>
-                  <CardDescription>Install or remove mods on your device</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-6">
+              <div className={`space-y-6 ${(installQueue.size > 0 || uninstallQueue.size > 0) ? 'pb-48' : ''}`}>
+                  {/* Filters */}
+                  <div className="flex gap-2">
+                    <div className="relative flex-1">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                      <Input
+                        placeholder="Search mods..."
+                        value={search}
+                        onChange={(e) => setSearch(e.target.value)}
+                        className="pl-9"
+                      />
+                    </div>
+                    <Select value={categoryFilter} onValueChange={setCategoryFilter}>
+                      <SelectTrigger className="w-[160px]">
+                        <SelectValue placeholder="Category" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Categories</SelectItem>
+                        {categories.map((cat) => (
+                          <SelectItem key={cat} value={cat}>{cat}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
                   {/* Installed Section */}
-                  {packages.filter((p) => installedPackages.has(p.name)).length > 0 && (
-                    <div>
-                      <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
-                        Installed
-                      </h3>
-                      <div className="grid grid-cols-2 gap-4">
-                        {packages
-                          .filter((pkg) => installedPackages.has(pkg.name))
-                          .map((pkg) => {
-                            const isQueued = uninstallQueue.has(pkg.name)
-                            return (
-                              <div
-                                key={pkg.name}
-                                className={`flex flex-col p-4 rounded-lg border transition-colors ${
-                                  isQueued ? 'border-destructive bg-destructive/5' : 'border-border'
-                                }`}
-                              >
-                                <div className="flex-1">
-                                  <span className="font-medium">{pkg.name}</span>
+                  {installedFiltered.length > 0 && (
+                    <Card>
+                      <CardHeader
+                        className={`cursor-pointer select-none ${installedExpanded ? 'pb-3' : 'py-4'}`}
+                        onClick={() => setInstalledExpanded(!installedExpanded)}
+                      >
+                        <CardTitle className="text-sm font-semibold uppercase tracking-wide flex items-center justify-between">
+                          <span>Installed ({installedFiltered.length})</span>
+                          <ChevronDown className={`h-4 w-4 transition-transform ${installedExpanded ? '' : '-rotate-90'}`} />
+                        </CardTitle>
+                      </CardHeader>
+                      {installedExpanded && (
+                        <CardContent className="pt-0">
+                          <div className="divide-y">
+                            {installedFiltered.map((pkg, index) => {
+                              const isQueued = uninstallQueue.has(pkg.name)
+                              const prevQueued = index > 0 && uninstallQueue.has(installedFiltered[index - 1].name)
+                              return (
+                                <div key={pkg.name} className={`py-3 px-6 -mx-6 flex items-center gap-4 transition-colors ${isQueued ? `border-l-4 border-destructive ${!prevQueued ? 'border-t' : ''}` : index % 2 === 1 ? 'bg-muted/50 hover:bg-muted' : 'hover:bg-muted/70'}`}>
+                                <div
+                                  className="flex-1 min-w-0 cursor-pointer"
+                                  onClick={() => setSelectedPackage(pkg)}
+                                >
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-medium">{pkg.name}</span>
+                                    {pkg.category && <Badge variant="outline">{pkg.category}</Badge>}
+                                  </div>
                                   <p className="text-sm text-muted-foreground mt-1">{pkg.description}</p>
                                   {pkg.upstreamAuthor && (
-                                    <a href={pkg.url} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-500 hover:underline">
+                                    <span className="text-sm text-muted-foreground">
                                       by {pkg.upstreamAuthor}
-                                    </a>
+                                    </span>
                                   )}
                                 </div>
-                                <div className="flex justify-end mt-3">
-                                  {isQueued ? (
-                                    <Button
-                                      variant="outline"
-                                      size="sm"
-                                      onClick={() => removeFromUninstallQueue(pkg.name)}
-                                    >
-                                      <Check className="h-4 w-4 mr-1" />
-                                      Queued
-                                    </Button>
-                                  ) : (
-                                    <Button
-                                      variant="outline"
-                                      size="sm"
-                                      onClick={() => addToUninstallQueue(pkg.name)}
-                                      disabled={installing || uninstalling}
-                                    >
-                                      <Trash2 className="h-4 w-4 mr-1" />
-                                      Remove
-                                    </Button>
-                                  )}
+                                {isQueued ? (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => removeFromUninstallQueue(pkg.name)}
+                                  >
+                                    <Check className="h-4 w-4 mr-1" />
+                                    Queued
+                                  </Button>
+                                ) : (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => addToUninstallQueue(pkg.name)}
+                                    disabled={installing || uninstalling}
+                                  >
+                                    <Trash2 className="h-4 w-4 mr-1" />
+                                    Remove
+                                  </Button>
+                                )}
                                 </div>
-                              </div>
-                            )
-                          })}
-                      </div>
-                    </div>
+                              )
+                            })}
+                          </div>
+                        </CardContent>
+                      )}
+                    </Card>
                   )}
 
                   {/* Available Section */}
-                  {packages.filter((p) => !installedPackages.has(p.name)).length > 0 && (
-                    <div>
-                      <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
-                        Available
-                      </h3>
-                      <div className="grid grid-cols-2 gap-4">
-                        {packages
-                          .filter((pkg) => !installedPackages.has(pkg.name))
-                          .map((pkg) => {
-                            const isQueued = installQueue.has(pkg.name)
-                            return (
-                              <div
-                                key={pkg.name}
-                                className={`flex flex-col p-4 rounded-lg border transition-colors ${
-                                  isQueued ? 'border-primary bg-primary/5' : 'border-border'
-                                }`}
-                              >
-                                <div className="flex-1">
-                                  <span className="font-medium">{pkg.name}</span>
+                  {availableFiltered.length > 0 && (
+                    <Card>
+                      <CardHeader
+                        className={`cursor-pointer select-none ${availableExpanded ? 'pb-3' : 'py-4'}`}
+                        onClick={() => setAvailableExpanded(!availableExpanded)}
+                      >
+                        <CardTitle className="text-sm font-semibold uppercase tracking-wide flex items-center justify-between">
+                          <span>Available ({availableFiltered.length})</span>
+                          <ChevronDown className={`h-4 w-4 transition-transform ${availableExpanded ? '' : '-rotate-90'}`} />
+                        </CardTitle>
+                      </CardHeader>
+                      {availableExpanded && (
+                        <CardContent className="pt-0">
+                          <div className="divide-y">
+                            {availableFiltered.map((pkg, index) => {
+                              const isQueued = installQueue.has(pkg.name)
+                              const prevQueued = index > 0 && installQueue.has(availableFiltered[index - 1].name)
+                              const conflict = getConflict(pkg)
+                              return (
+                                <div key={pkg.name} className={`py-3 px-6 -mx-6 flex items-center gap-4 transition-colors ${isQueued ? `border-l-4 border-primary ${!prevQueued ? 'border-t' : ''}` : index % 2 === 1 ? 'bg-muted/50 hover:bg-muted' : 'hover:bg-muted/70'}`}>
+                                <div
+                                  className="flex-1 min-w-0 cursor-pointer"
+                                  onClick={() => setSelectedPackage(pkg)}
+                                >
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-medium">{pkg.name}</span>
+                                    {pkg.category && <Badge variant="outline">{pkg.category}</Badge>}
+                                  </div>
                                   <p className="text-sm text-muted-foreground mt-1">{pkg.description}</p>
                                   {pkg.upstreamAuthor && (
-                                    <a href={pkg.url} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-500 hover:underline">
+                                    <span className="text-sm text-muted-foreground">
                                       by {pkg.upstreamAuthor}
-                                    </a>
+                                    </span>
                                   )}
-                                  {pkg.depends && pkg.depends.length > 0 && (
-                                    <div className="flex flex-wrap gap-1 mt-2">
-                                      {pkg.depends.map((dep) => (
-                                        <span
-                                          key={dep}
-                                          className="text-xs px-2 py-0.5 rounded bg-secondary text-secondary-foreground"
+                                </div>
+                                {isQueued ? (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => removeFromQueue(pkg.name)}
+                                  >
+                                    <Check className="h-4 w-4 mr-1" />
+                                    Queued
+                                  </Button>
+                                ) : conflict ? (
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <span>
+                                        <Button
+                                          variant="outline"
+                                          size="sm"
+                                          disabled
                                         >
-                                          {dep}
-                                        </span>
-                                      ))}
-                                    </div>
-                                  )}
-                                </div>
-                                <div className="flex justify-end mt-3">
-                                  {isQueued ? (
-                                    <Button
-                                      variant="outline"
-                                      size="sm"
-                                      onClick={() => removeFromQueue(pkg.name)}
-                                    >
-                                      <Check className="h-4 w-4 mr-1" />
-                                      Queued
-                                    </Button>
-                                  ) : (
-                                    <Button
-                                      variant="outline"
-                                      size="sm"
-                                      onClick={() => addToQueue(pkg.name)}
-                                      disabled={installing || uninstalling}
-                                    >
-                                      <Plus className="h-4 w-4 mr-1" />
-                                      Add
-                                    </Button>
-                                  )}
-                                </div>
+                                          <Plus className="h-4 w-4 mr-1" />
+                                          Add
+                                        </Button>
+                                      </span>
+                                    </TooltipTrigger>
+                                    <TooltipContent>{conflict}</TooltipContent>
+                                  </Tooltip>
+                                ) : (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => addToQueue(pkg.name)}
+                                    disabled={installing || uninstalling}
+                                  >
+                                    <Plus className="h-4 w-4 mr-1" />
+                                    Add
+                                  </Button>
+                                )}
                               </div>
                             )
                           })}
-                      </div>
-                    </div>
+                        </div>
+                      </CardContent>
+                      )}
+                    </Card>
                   )}
 
-                  {packages.length === 0 && (
-                    <p className="text-center text-muted-foreground py-8">No mods available</p>
+                  {filteredPackages.length === 0 && (
+                    <p className="text-center text-muted-foreground py-8">
+                      {packages.length === 0 ? 'No mods available' : 'No mods match your filters'}
+                    </p>
                   )}
 
                   {/* Queue Error */}
@@ -1166,103 +1302,187 @@ export default function App() {
 
                   {/* Queue Section */}
                   {(installQueue.size > 0 || uninstallQueue.size > 0) && (
-                    <div className="sticky bottom-0 -mx-6 -mb-6 px-6 py-4 bg-card border-t space-y-4">
+                    <div className="fixed bottom-0 left-0 right-0 py-4 px-6 bg-background border-t shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] z-50 space-y-4">
                       {/* Install Queue */}
                       {installQueue.size > 0 && (
                         <div>
-                          <div className="flex items-center justify-between mb-2">
-                            <span className="text-sm font-medium">
+                          <div
+                            className="flex items-center mb-2 cursor-pointer select-none"
+                            onClick={() => setInstallQueueExpanded(!installQueueExpanded)}
+                          >
+                            <span className="text-sm font-medium flex items-center gap-2">
                               Install Queue ({installQueue.size})
+                              <ChevronDown className={`h-4 w-4 transition-transform ${installQueueExpanded ? '' : '-rotate-90'}`} />
                             </span>
-                            <Button variant="ghost" size="sm" onClick={clearQueue}>
-                              Clear
+                          </div>
+                          {installQueueExpanded && (
+                            <div className="space-y-1 mb-3">
+                              {Array.from(installQueue).map((name) => {
+                                return (
+                                  <div
+                                    key={name}
+                                    className="flex items-center justify-between text-sm py-1"
+                                  >
+                                    <span>{name}</span>
+                                    <button
+                                      onClick={() => removeFromQueue(name)}
+                                      className="text-muted-foreground hover:text-foreground"
+                                    >
+                                      <X className="h-4 w-4" />
+                                    </button>
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          )}
+                          <div className="flex gap-2">
+                            <Button
+                              variant="outline"
+                              className="flex-1"
+                              onClick={clearQueue}
+                              disabled={installing || uninstalling}
+                            >
+                              Clear Install Queue
+                            </Button>
+                            <Button
+                              className="flex-1"
+                              onClick={async () => {
+                                setSimulatingInstall(true)
+                                try {
+                                  const sim = await window.go.main.App.SimulateInstall([...installQueue], device)
+                                  if (sim.packages.length === 0) {
+                                    setQueueError('All packages are already installed')
+                                    setTimeout(() => setQueueError(null), 4000)
+                                    setInstallQueue(new Set())
+                                  } else {
+                                    setPendingInstallConfirm({ packages: sim.packages, requested: sim.requested })
+                                  }
+                                } catch (err) {
+                                  console.error('SimulateInstall failed:', err)
+                                  const pkgs = [...installQueue]
+                                  setPendingInstallConfirm({ packages: pkgs, requested: pkgs })
+                                } finally {
+                                  setSimulatingInstall(false)
+                                }
+                              }}
+                              disabled={installing || uninstalling || simulatingInstall}
+                            >
+                              {installing ? (
+                                <>
+                                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                  Installing...
+                                </>
+                              ) : simulatingInstall ? (
+                                <>
+                                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                  Checking...
+                                </>
+                              ) : (
+                                'Install Selected'
+                              )}
                             </Button>
                           </div>
-                          <div className="space-y-1 mb-3">
-                            {Array.from(installQueue).map((name) => {
-                              return (
-                                <div
-                                  key={name}
-                                  className="flex items-center justify-between text-sm py-1"
-                                >
-                                  <span>{name}</span>
-                                  <button
-                                    onClick={() => removeFromQueue(name)}
-                                    className="text-muted-foreground hover:text-foreground"
-                                  >
-                                    <X className="h-4 w-4" />
-                                  </button>
-                                </div>
-                              )
-                            })}
-                          </div>
-                          <Button
-                            className="w-full"
-                            onClick={handleInstallQueue}
-                            disabled={installing || uninstalling}
-                          >
-                            {installing ? (
-                              <>
-                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                Installing...
-                              </>
-                            ) : (
-                              'Install All'
-                            )}
-                          </Button>
                         </div>
                       )}
 
                       {/* Uninstall Queue */}
                       {uninstallQueue.size > 0 && (
                         <div>
-                          <div className="flex items-center justify-between mb-2">
-                            <span className="text-sm font-medium text-destructive">
+                          <div
+                            className="flex items-center mb-2 cursor-pointer select-none"
+                            onClick={() => setUninstallQueueExpanded(!uninstallQueueExpanded)}
+                          >
+                            <span className="text-sm font-medium text-destructive flex items-center gap-2">
                               Uninstall Queue ({uninstallQueue.size})
+                              <ChevronDown className={`h-4 w-4 transition-transform ${uninstallQueueExpanded ? '' : '-rotate-90'}`} />
                             </span>
-                            <Button variant="ghost" size="sm" onClick={clearUninstallQueue}>
-                              Clear
+                          </div>
+                          {uninstallQueueExpanded && (
+                            <div className="space-y-1 mb-3">
+                              {Array.from(uninstallQueue).map((name) => {
+                                return (
+                                  <div
+                                    key={name}
+                                    className="flex items-center justify-between text-sm py-1"
+                                  >
+                                    <span>{name}</span>
+                                    <button
+                                      onClick={() => removeFromUninstallQueue(name)}
+                                      className="text-muted-foreground hover:text-foreground"
+                                    >
+                                      <X className="h-4 w-4" />
+                                    </button>
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          )}
+                          <div className="flex gap-2">
+                            <Button
+                              variant="outline"
+                              className="flex-1"
+                              onClick={clearUninstallQueue}
+                              disabled={installing || uninstalling}
+                            >
+                              Clear Uninstall Queue
+                            </Button>
+                            <Button
+                              className="flex-1"
+                              onClick={async () => {
+                                setSimulatingUninstall(true)
+                                try {
+                                  const selected = [...uninstallQueue]
+                                  const sim = await window.go.main.App.SimulateUninstall(selected)
+                                  if (sim.blocked && Object.keys(sim.blocked).length > 0) {
+                                    setPendingUninstallConfirm({
+                                      selected,
+                                      packages: sim.recursivePackages || sim.packages,
+                                      blocked: sim.blocked,
+                                      useRecursive: true
+                                    })
+                                  } else {
+                                    setPendingUninstallConfirm({
+                                      selected,
+                                      packages: sim.packages.length > 0 ? sim.packages : selected,
+                                      blocked: null,
+                                      useRecursive: false
+                                    })
+                                  }
+                                } catch (err) {
+                                  console.error('SimulateUninstall failed:', err)
+                                  const selected = [...uninstallQueue]
+                                  setPendingUninstallConfirm({
+                                    selected,
+                                    packages: selected,
+                                    blocked: null,
+                                    useRecursive: false
+                                  })
+                                } finally {
+                                  setSimulatingUninstall(false)
+                                }
+                              }}
+                              disabled={installing || uninstalling || simulatingUninstall}
+                            >
+                              {uninstalling ? (
+                                <>
+                                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                  Removing...
+                                </>
+                              ) : simulatingUninstall ? (
+                                <>
+                                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                  Checking...
+                                </>
+                              ) : (
+                                'Uninstall Selected'
+                              )}
                             </Button>
                           </div>
-                          <div className="space-y-1 mb-3">
-                            {Array.from(uninstallQueue).map((name) => {
-                              return (
-                                <div
-                                  key={name}
-                                  className="flex items-center justify-between text-sm py-1"
-                                >
-                                  <span>{name}</span>
-                                  <button
-                                    onClick={() => removeFromUninstallQueue(name)}
-                                    className="text-muted-foreground hover:text-foreground"
-                                  >
-                                    <X className="h-4 w-4" />
-                                  </button>
-                                </div>
-                              )
-                            })}
-                          </div>
-                          <Button
-                            variant="destructive"
-                            className="w-full"
-                            onClick={handleUninstallQueue}
-                            disabled={installing || uninstalling}
-                          >
-                            {uninstalling ? (
-                              <>
-                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                Removing...
-                              </>
-                            ) : (
-                              'Uninstall All'
-                            )}
-                          </Button>
                         </div>
                       )}
                     </div>
                   )}
-                </CardContent>
-              </Card>
+                </div>
             </TabsContent>
 
             <TabsContent value="maintenance">
@@ -1486,36 +1706,169 @@ export default function App() {
 
       {/* Progress Modal */}
       <Dialog
-        open={showProgressModal}
+        open={showProgressModal || pendingInstallConfirm !== null || pendingUninstallConfirm !== null}
         onOpenChange={(open) => {
           if (!installing && !uninstalling && !commandRunning) {
-            setShowProgressModal(open)
             if (!open) {
+              setShowProgressModal(false)
+              setPendingInstallConfirm(null)
+              setPendingUninstallConfirm(null)
               setProgressModalType(null)
               setProgressIndex(0)
               setProgressTotal(0)
               setProgressPercentage(0)
               setOutput('')
               setMaintenanceOutput('')
+              setLastInstallSuccess(null)
+              setLastOperationType(null)
             }
           }
         }}
         closable={!installing && !uninstalling && !commandRunning}
       >
         <DialogContent className="max-w-6xl w-full">
-          <ProgressModal
-            title={getModalTitle()}
-            progressText={getProgressText()}
-            percentage={progressPercentage}
-            terminalOutput={progressModalType === 'maintenance' ? maintenanceOutput : output}
-            isComplete={!installing && !uninstalling && !commandRunning}
-            onClose={() => {
-              setShowProgressModal(false)
-              setOutput('')
-              setMaintenanceOutput('')
-              setProgressModalType(null)
-            }}
-          />
+          {/* Confirmation step for install */}
+          {pendingInstallConfirm !== null && !installing && !uninstalling && (() => {
+            const requestedSet = new Set(pendingInstallConfirm.requested)
+            const requiredBy: Record<string, string[]> = {}
+            for (const pkgName of pendingInstallConfirm.packages) {
+              if (!requestedSet.has(pkgName)) {
+                for (const reqPkg of pendingInstallConfirm.requested) {
+                  const pkgInfo = packages.find((p) => p.name === reqPkg)
+                  if (pkgInfo?.depends?.includes(pkgName)) {
+                    if (!requiredBy[pkgName]) requiredBy[pkgName] = []
+                    requiredBy[pkgName].push(reqPkg)
+                  }
+                }
+              }
+            }
+            return (
+              <>
+                <DialogHeader>
+                  <DialogTitle>Install Packages</DialogTitle>
+                  <DialogDescription>
+                    The following {pendingInstallConfirm.packages.length} package{pendingInstallConfirm.packages.length !== 1 ? 's' : ''} will be installed:
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="max-h-[40vh] overflow-y-auto">
+                  <ul className="space-y-1 text-sm">
+                    {[...pendingInstallConfirm.packages].sort().map((name) => (
+                      <li key={name}>
+                        {name}
+                        {requiredBy[name] && (
+                          <span className="text-muted-foreground ml-2">
+                            (required by {requiredBy[name].join(', ')})
+                          </span>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setPendingInstallConfirm(null)}>
+                    Cancel
+                  </Button>
+                  <Button onClick={() => {
+                    const pkgs = pendingInstallConfirm.packages
+                    setPendingInstallConfirm(null)
+                    handleInstallQueue(pkgs)
+                  }}>
+                    Install ({pendingInstallConfirm.packages.length})
+                  </Button>
+                </DialogFooter>
+              </>
+            )
+          })()}
+
+          {/* Confirmation step for uninstall */}
+          {pendingUninstallConfirm !== null && !installing && !uninstalling && (() => {
+            // Build a map: dependent -> what it requires
+            const dependsOn: Record<string, string[]> = {}
+            if (pendingUninstallConfirm.blocked) {
+              for (const [pkg, dependents] of Object.entries(pendingUninstallConfirm.blocked)) {
+                for (const dep of dependents) {
+                  if (!dependsOn[dep]) dependsOn[dep] = []
+                  dependsOn[dep].push(pkg)
+                }
+              }
+            }
+
+            const selected = pendingUninstallConfirm.selected
+            const additional = pendingUninstallConfirm.packages.filter(pkg => !selected.includes(pkg))
+
+            return (
+              <>
+                <DialogHeader>
+                  <DialogTitle className="flex items-center gap-2">
+                    {additional.length > 0 && (
+                      <AlertTriangle className="h-5 w-5 text-yellow-500" />
+                    )}
+                    Uninstall Packages
+                  </DialogTitle>
+                  <DialogDescription>
+                    The following {pendingUninstallConfirm.packages.length} package{pendingUninstallConfirm.packages.length !== 1 ? 's' : ''} will be removed:
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="max-h-[40vh] overflow-y-auto space-y-4">
+                  <div>
+                    <p className="font-medium text-sm mb-2">Selected for removal:</p>
+                    <ul className="space-y-1 text-sm">
+                      {[...selected].sort().map((name) => (
+                        <li key={name}>{name}</li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  {additional.length > 0 && (
+                    <div>
+                      <p className="font-medium text-sm mb-2">Will also be removed:</p>
+                      <ul className="space-y-1 text-sm">
+                        {[...additional].sort().map((name) => (
+                          <li key={name}>
+                            {name}
+                            {dependsOn[name] && (
+                              <span className="text-muted-foreground"> (requires {dependsOn[name].join(', ')})</span>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setPendingUninstallConfirm(null)}>
+                    Cancel
+                  </Button>
+                  <Button variant="destructive" onClick={() => {
+                    const packages = pendingUninstallConfirm.packages
+                    setPendingUninstallConfirm(null)
+                    handleUninstallQueue(packages)
+                  }}>
+                    Uninstall ({pendingUninstallConfirm.packages.length})
+                  </Button>
+                </DialogFooter>
+              </>
+            )
+          })()}
+
+          {/* Progress step */}
+          {(showProgressModal || installing || uninstalling || commandRunning) && pendingInstallConfirm === null && pendingUninstallConfirm === null && (
+            <ProgressModal
+              title={getModalTitle()}
+              progressText={getProgressText()}
+              percentage={progressPercentage}
+              terminalOutput={progressModalType === 'maintenance' ? maintenanceOutput : output}
+              isComplete={!installing && !uninstalling && !commandRunning}
+              onClose={() => {
+                setShowProgressModal(false)
+                setOutput('')
+                setMaintenanceOutput('')
+                setProgressModalType(null)
+                setLastInstallSuccess(null)
+                setLastOperationType(null)
+              }}
+            />
+          )}
         </DialogContent>
       </Dialog>
 
@@ -1624,6 +1977,34 @@ export default function App() {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* Package Detail Side Panel */}
+      <Sheet open={selectedPackage !== null} onOpenChange={(open) => !open && setSelectedPackage(null)}>
+        <SheetContent side="right" className="w-[400px] sm:w-[450px] sm:max-w-none flex flex-col">
+          {selectedPackage && (
+            <PackageDetailPanel
+              pkg={selectedPackage}
+              isInstalled={installedPackages.has(selectedPackage.name)}
+              installedPackages={installedPackages}
+              onInstall={() => {
+                addToQueue(selectedPackage.name)
+                setSelectedPackage(null)
+              }}
+              onUninstall={() => {
+                addToUninstallQueue(selectedPackage.name)
+                setSelectedPackage(null)
+              }}
+              isQueued={installQueue.has(selectedPackage.name) || uninstallQueue.has(selectedPackage.name)}
+              queueType={installQueue.has(selectedPackage.name) ? 'install' : uninstallQueue.has(selectedPackage.name) ? 'uninstall' : null}
+              disabled={installing || uninstalling}
+              onSelectPackage={(name) => {
+                const pkg = packages.find(p => p.name === name)
+                if (pkg) setSelectedPackage(pkg)
+              }}
+            />
+          )}
+        </SheetContent>
+      </Sheet>
     </div>
   )
 }

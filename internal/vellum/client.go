@@ -2,6 +2,7 @@ package vellum
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"reManager/internal/executor"
@@ -124,4 +125,123 @@ func (c *Client) FetchURLs(packages ...string) ([]string, error) {
 		}
 	}
 	return urls, nil
+}
+
+// SimulateAdd returns the list of packages that would actually be installed
+// (excludes packages that are already installed)
+func (c *Client) SimulateAdd(packages ...string) ([]string, error) {
+	if len(packages) == 0 {
+		return nil, nil
+	}
+	cmd := fmt.Sprintf("%s add --simulate %s", VellumBin, strings.Join(packages, " "))
+	output, err := c.executor.ExecuteWithOutput(cmd)
+	if err != nil {
+		return nil, err
+	}
+	return parseSimulationOutput(output), nil
+}
+
+// SimulateDelResult contains the result of simulating a package deletion
+type SimulateDelResult struct {
+	Packages []string            // packages that would be removed
+	Blocked  map[string][]string // pkg -> list of blocking packages (e.g. "xovi" -> ["hide-dev-mode-icon"])
+}
+
+// SimulateDel simulates package deletion and returns packages to remove and any blockers
+func (c *Client) SimulateDel(packages ...string) (*SimulateDelResult, error) {
+	if len(packages) == 0 {
+		return &SimulateDelResult{}, nil
+	}
+	cmd := fmt.Sprintf("%s del -s %s", VellumBin, strings.Join(packages, " "))
+	output, err := c.executor.ExecuteWithOutput(cmd)
+	if err != nil {
+		return nil, err
+	}
+
+	result := &SimulateDelResult{
+		Packages: parseSimulationOutput(output),
+		Blocked:  parseBlockedPackages(output),
+	}
+	return result, nil
+}
+
+// SimulateDelRecursive simulates recursive package deletion (includes dependents)
+func (c *Client) SimulateDelRecursive(packages ...string) ([]string, error) {
+	if len(packages) == 0 {
+		return nil, nil
+	}
+	cmd := fmt.Sprintf("%s del -rs %s", VellumBin, strings.Join(packages, " "))
+	output, err := c.executor.ExecuteWithOutput(cmd)
+	if err != nil {
+		return nil, err
+	}
+	return parseSimulationOutput(output), nil
+}
+
+// DelRecursiveStreaming removes packages and their dependents with streaming output
+func (c *Client) DelRecursiveStreaming(onOutput func(line string), packages ...string) error {
+	if len(packages) == 0 {
+		return nil
+	}
+	cmd := fmt.Sprintf("%s del -r %s", VellumBin, strings.Join(packages, " "))
+	return c.executor.ExecuteStreaming(cmd, onOutput)
+}
+
+// parseSimulationOutput extracts package names from vellum simulation output
+// Example lines: "(1/3) Purging hide-dev-mode-icon (1.0.0-r0)"
+//
+//	"(2/3) Installing qt-resource-rebuilder (16.0.0-r0)"
+var simulationLineRegex = regexp.MustCompile(`\(\d+/\d+\)\s+(?:Installing|Purging)\s+([^\s]+)\s+\(`)
+
+func parseSimulationOutput(output string) []string {
+	var packages []string
+	for _, line := range strings.Split(output, "\n") {
+		matches := simulationLineRegex.FindStringSubmatch(line)
+		if len(matches) >= 2 {
+			packages = append(packages, matches[1])
+		}
+	}
+	return packages
+}
+
+// parseBlockedPackages extracts blocked package info from vellum simulation output
+// Example output (can wrap to multiple lines):
+//
+//	World updated, but the following packages are not removed due to:
+//	  xovi: quicksettings-screenshot bettertoc hide-dev-mode-icon
+//	        disable-selection-autoscroll gesture-toolbar-show
+func parseBlockedPackages(output string) map[string][]string {
+	blocked := make(map[string][]string)
+	inBlockedSection := false
+	var currentPkg string
+
+	for _, line := range strings.Split(output, "\n") {
+		if strings.Contains(line, "not removed due to:") {
+			inBlockedSection = true
+			continue
+		}
+		if inBlockedSection {
+			trimmed := strings.TrimSpace(line)
+			if trimmed == "" {
+				inBlockedSection = false
+				currentPkg = ""
+				continue
+			}
+
+			// Check for "pkg: blockers" format (line starts with 2 spaces and has colon)
+			if idx := strings.Index(line, ":"); idx > 0 && strings.HasPrefix(line, "  ") && !strings.HasPrefix(line, "        ") {
+				parts := strings.SplitN(trimmed, ":", 2)
+				if len(parts) == 2 {
+					currentPkg = strings.TrimSpace(parts[0])
+					blockers := strings.Fields(parts[1])
+					blocked[currentPkg] = append(blocked[currentPkg], blockers...)
+				}
+			} else if currentPkg != "" {
+				// Continuation line - just indented blockers
+				blockers := strings.Fields(trimmed)
+				blocked[currentPkg] = append(blocked[currentPkg], blockers...)
+			}
+		}
+	}
+	return blocked
 }

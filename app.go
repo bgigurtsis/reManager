@@ -930,6 +930,75 @@ type DialogRequest struct {
 	InProgressMessage string   `json:"inProgressMessage"`
 }
 
+type BlockedUninstallInfo struct {
+	RequestedPackages []string            `json:"requestedPackages"`
+	BlockedBy         map[string][]string `json:"blockedBy"`
+}
+
+// InstallSimulationResult contains the result of simulating an install
+type InstallSimulationResult struct {
+	Packages  []string `json:"packages"`  // All packages that will be installed (including dependencies)
+	Requested []string `json:"requested"` // Originally requested packages
+}
+
+// UninstallSimulationResult contains the result of simulating an uninstall
+type UninstallSimulationResult struct {
+	Packages          []string            `json:"packages"`          // Packages that will be removed
+	Blocked           map[string][]string `json:"blocked"`           // Packages blocked by dependents
+	RecursivePackages []string            `json:"recursivePackages"` // All packages if recursive removal is needed
+}
+
+// SimulateInstall returns all packages that will be installed (including dependencies)
+func (a *App) SimulateInstall(packageNames []string, deviceType string) (*InstallSimulationResult, error) {
+	if a.vellumClient == nil {
+		return &InstallSimulationResult{Packages: packageNames, Requested: packageNames}, nil
+	}
+
+	// Use SimulateAdd to get all packages that will be installed
+	allPackages, err := a.vellumClient.SimulateAdd(packageNames...)
+	if err != nil {
+		fmt.Printf("[DEBUG] SimulateAdd failed: %v, using packageNames only\n", err)
+		return &InstallSimulationResult{Packages: packageNames, Requested: packageNames}, nil
+	}
+
+	// If nothing to install (all already installed), return empty
+	if len(allPackages) == 0 {
+		return &InstallSimulationResult{Packages: []string{}, Requested: packageNames}, nil
+	}
+
+	return &InstallSimulationResult{Packages: allPackages, Requested: packageNames}, nil
+}
+
+// SimulateUninstall returns simulation info for uninstalling packages
+func (a *App) SimulateUninstall(packageNames []string) (*UninstallSimulationResult, error) {
+	if a.vellumClient == nil {
+		return &UninstallSimulationResult{Packages: packageNames}, nil
+	}
+
+	simResult, err := a.vellumClient.SimulateDel(packageNames...)
+	if err != nil {
+		fmt.Printf("[DEBUG] SimulateDel failed: %v\n", err)
+		return &UninstallSimulationResult{Packages: packageNames}, nil
+	}
+
+	result := &UninstallSimulationResult{
+		Packages: simResult.Packages,
+		Blocked:  simResult.Blocked,
+	}
+
+	// If there are blocked packages, also get the recursive list
+	if len(simResult.Blocked) > 0 {
+		recursiveList, err := a.vellumClient.SimulateDelRecursive(packageNames...)
+		if err != nil {
+			fmt.Printf("[DEBUG] SimulateDelRecursive failed: %v\n", err)
+		} else {
+			result.RecursivePackages = recursiveList
+		}
+	}
+
+	return result, nil
+}
+
 func (a *App) RespondToDialog(confirmed bool) {
 	if a.dialogResponse != nil {
 		a.dialogResponse <- confirmed
@@ -956,6 +1025,7 @@ func (a *App) InstallPackages(packageNames []string, deviceType string) {
 		sshClient := a.client
 		a.mu.Unlock()
 
+		var allPackages []string
 		if sshClient != nil {
 			proxy := vellum.NewProxy(a.vellumClient, sshClient, string(arch))
 			runtime.EventsEmit(a.ctx, "install:progress", InstallProgress{
@@ -963,7 +1033,8 @@ func (a *App) InstallPackages(packageNames []string, deviceType string) {
 				Message: "Downloading packages via proxy...",
 			})
 
-			err := proxy.ProxyDownload(packageNames, func(msg string) {
+			var err error
+			allPackages, err = proxy.ProxyDownload(packageNames, func(msg string) {
 				runtime.EventsEmit(a.ctx, "install:progress", InstallProgress{
 					Status:  "downloading",
 					Message: msg,
@@ -976,6 +1047,8 @@ func (a *App) InstallPackages(packageNames []string, deviceType string) {
 				})
 				return
 			}
+		} else {
+			allPackages = packageNames
 		}
 
 		exec := &wailsExecutor{app: a}
@@ -983,6 +1056,7 @@ func (a *App) InstallPackages(packageNames []string, deviceType string) {
 
 		result := inst.Install(
 			packageNames,
+			allPackages,
 			ctx,
 			func(progress executor.ProgressInfo) {
 				runtime.EventsEmit(a.ctx, "install:progress", InstallProgress{
@@ -1042,11 +1116,56 @@ func (a *App) UninstallPackages(packageNames []string, deviceType string) {
 			Device: component.DeviceType(deviceType),
 		}
 
+		// Simulate uninstall to check for blockers and get full package list
+		var allPackages []string
+		useRecursive := false
+
+		if a.vellumClient != nil {
+			simResult, err := a.vellumClient.SimulateDel(packageNames...)
+			if err != nil {
+				fmt.Printf("[DEBUG] SimulateDel failed: %v, using packageNames only\n", err)
+				allPackages = packageNames
+			} else if len(simResult.Blocked) > 0 {
+				// Packages are blocked by dependents - prompt user
+				fmt.Printf("[DEBUG] Packages blocked: %v\n", simResult.Blocked)
+				runtime.EventsEmit(a.ctx, "uninstall:blocked", BlockedUninstallInfo{
+					RequestedPackages: packageNames,
+					BlockedBy:         simResult.Blocked,
+				})
+
+				confirmed := <-a.dialogResponse
+				if !confirmed {
+					runtime.EventsEmit(a.ctx, "install:complete", InstallResult{
+						Success: false,
+						Errors:  []string{"Uninstall cancelled by user"},
+					})
+					return
+				}
+
+				// User confirmed - use recursive deletion
+				useRecursive = true
+				allPackages, err = a.vellumClient.SimulateDelRecursive(packageNames...)
+				if err != nil {
+					fmt.Printf("[DEBUG] SimulateDelRecursive failed: %v\n", err)
+					allPackages = packageNames
+				}
+			} else {
+				allPackages = simResult.Packages
+				if len(allPackages) == 0 {
+					allPackages = packageNames
+				}
+			}
+		} else {
+			allPackages = packageNames
+		}
+
 		exec := &wailsExecutor{app: a}
 		inst := installer.NewInstaller(a.vellumClient, a.metadata, exec)
 
 		result := inst.Uninstall(
 			packageNames,
+			allPackages,
+			useRecursive,
 			ctx,
 			func(progress executor.ProgressInfo) {
 				runtime.EventsEmit(a.ctx, "install:progress", InstallProgress{

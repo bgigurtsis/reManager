@@ -208,8 +208,24 @@ func installCmd() *cobra.Command {
 
 			inst := installer.NewInstaller(vellumClient, metadata, exec)
 
+			// Get full package list including dependencies via simulation
+			allPackages, err := vellumClient.FetchURLs(args...)
+			if err != nil {
+				fmt.Printf("Warning: could not get dependency list: %v\n", err)
+				allPackages = nil
+			}
+			// Parse package names from URLs (simplified - just use args if parsing fails)
+			var allPkgNames []string
+			if allPackages == nil {
+				allPkgNames = args
+			} else {
+				// For CLI, just use the requested packages since we don't have proxy logic here
+				allPkgNames = args
+			}
+
 			result := inst.Install(
 				args,
+				allPkgNames,
 				ctx,
 				func(progress executor.ProgressInfo) {
 					fmt.Printf("[%d/%d] %s: %s\n", progress.CurrentIndex+1, progress.TotalComponents, progress.CurrentComponent, progress.Message)
@@ -292,8 +308,44 @@ func uninstallCmd() *cobra.Command {
 
 			inst := installer.NewInstaller(vellumClient, metadata, exec)
 
+			// Get full package list including orphaned deps via simulation
+			var allPackages []string
+			simResult, err := vellumClient.SimulateDel(args...)
+			if err != nil {
+				fmt.Printf("Warning: could not get full uninstall list: %v\n", err)
+				allPackages = args
+			} else if len(simResult.Blocked) > 0 {
+				// Packages blocked by dependents - for CLI, prompt user
+				fmt.Println("\nThe following packages cannot be removed due to dependencies:")
+				for pkg, blockers := range simResult.Blocked {
+					fmt.Printf("  %s is required by: %s\n", pkg, strings.Join(blockers, ", "))
+				}
+				fmt.Print("\nRemove these dependent packages as well? [y/N]: ")
+				var response string
+				fmt.Scanln(&response)
+				if strings.ToLower(response) != "y" {
+					return fmt.Errorf("uninstall cancelled")
+				}
+				// Use recursive deletion
+				allPackages, err = vellumClient.SimulateDelRecursive(args...)
+				if err != nil {
+					fmt.Printf("Warning: could not get recursive uninstall list: %v\n", err)
+					allPackages = args
+				}
+			} else {
+				allPackages = simResult.Packages
+				if len(allPackages) == 0 {
+					allPackages = args
+				}
+			}
+
+			// Determine if we need recursive deletion
+			useRecursive := len(simResult.Blocked) > 0
+
 			result := inst.Uninstall(
 				args,
+				allPackages,
+				useRecursive,
 				ctx,
 				func(progress executor.ProgressInfo) {
 					fmt.Printf("[%d/%d] %s: %s\n", progress.CurrentIndex+1, progress.TotalComponents, progress.CurrentComponent, progress.Message)
