@@ -15,18 +15,13 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 	"golang.org/x/crypto/ssh"
 
-	"reManager/internal/commands"
 	"reManager/internal/component"
-	"reManager/internal/component/definitions"
 	"reManager/internal/device"
 	"reManager/internal/executor"
 	"reManager/internal/installer"
 	"reManager/internal/storage"
+	"reManager/internal/vellum"
 )
-
-func init() {
-	definitions.RegisterAll(component.DefaultRegistry)
-}
 
 type App struct {
 	ctx            context.Context
@@ -39,6 +34,8 @@ type App struct {
 	commandStdin   io.WriteCloser
 	dialogResponse chan bool
 	deviceStore    *storage.DeviceStore
+	vellumClient   *vellum.Client
+	metadata       *vellum.MetadataStore
 }
 
 func NewApp() *App {
@@ -52,6 +49,11 @@ func (a *App) startup(ctx context.Context) {
 		fmt.Printf("Warning: could not initialize device store: %v\n", err)
 	}
 	a.deviceStore = store
+
+	a.metadata = vellum.NewMetadataStore()
+	if err := a.metadata.Load(); err != nil {
+		fmt.Printf("Warning: could not load metadata: %v\n", err)
+	}
 }
 
 func (a *App) shutdown(ctx context.Context) {
@@ -205,36 +207,48 @@ func (a *App) ConnectToSavedDevice(id string) ConnectionResult {
 	return result
 }
 
-func (a *App) CheckComponentStatus(componentID string) bool {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	if a.client == nil {
+func (a *App) CheckVellumInstalled() bool {
+	if a.vellumClient == nil {
 		return false
 	}
-
-	var checkCmd string
-	switch componentID {
-	case "xovi":
-		checkCmd = "test -d /home/root/xovi && echo 'yes' || echo 'no'"
-	case "qt-resource-rebuilder":
-		checkCmd = "test -f /home/root/xovi/extensions.d/qt-resource-rebuilder.so && echo 'yes' || echo 'no'"
-	case "tripletap":
-		checkCmd = "test -f /home/root/xovi-tripletap/uninstall.sh && echo 'yes' || echo 'no'"
-	case "rm-hacks":
-		checkCmd = "test -f /home/root/xovi/exthome/qt-resource-rebuilder/zz_rmhacks.qmd && test -d /home/root/xovi/exthome/qt-resource-rebuilder/rmhacks && echo 'yes' || echo 'no'"
-	case "appload":
-		checkCmd = "test -f /home/root/xovi/extensions.d/appload.so && echo 'yes' || echo 'no'"
-	default:
-		return false
-	}
-
-	output, err := a.runCommand(checkCmd)
+	installed, err := a.vellumClient.IsInstalled()
 	if err != nil {
 		return false
 	}
+	return installed
+}
 
-	return strings.TrimSpace(output) == "yes"
+func (a *App) BootstrapVellum() {
+	go func() {
+		if a.vellumClient == nil {
+			runtime.EventsEmit(a.ctx, "vellum:bootstrap-error", "Not connected")
+			return
+		}
+
+		runtime.EventsEmit(a.ctx, "vellum:bootstrap-start", nil)
+
+		err := a.vellumClient.Bootstrap(func(line string) {
+			runtime.EventsEmit(a.ctx, "vellum:bootstrap-output", line)
+		})
+
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "vellum:bootstrap-error", err.Error())
+			return
+		}
+
+		runtime.EventsEmit(a.ctx, "vellum:bootstrap-complete", nil)
+	}()
+}
+
+func (a *App) CheckPackageInstalled(pkgName string) bool {
+	if a.vellumClient == nil {
+		return false
+	}
+	installed, err := a.vellumClient.IsPackageInstalled(pkgName)
+	if err != nil {
+		return false
+	}
+	return installed
 }
 
 func (a *App) Connect(host, password string) ConnectionResult {
@@ -369,7 +383,6 @@ func (a *App) dialWithContextWithRetry(ctx context.Context, addr string, config 
 func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) ConnectionResult {
 	a.mu.Lock()
 
-	// Cancel any existing connection attempt
 	if a.connectCancel != nil {
 		a.connectCancel()
 	}
@@ -379,7 +392,6 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 		a.client = nil
 	}
 
-	// Create cancellable context for this connection attempt
 	ctx, cancel := context.WithCancel(context.Background())
 	a.connectCancel = cancel
 
@@ -447,9 +459,13 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 	a.mu.Lock()
 	a.client = client
 	a.connectCancel = nil
+	fmt.Println("[DEBUG] SSH connected, creating vellum client")
+	a.vellumClient = vellum.NewClient(&wailsExecutor{app: a})
 	a.mu.Unlock()
 
-	device, err := a.detectDevice()
+	fmt.Println("[DEBUG] Detecting device...")
+	deviceType, err := a.detectDevice()
+	fmt.Printf("[DEBUG] Device detected: %s, err: %v\n", deviceType, err)
 	if err != nil {
 		return ConnectionResult{
 			Success: true,
@@ -458,10 +474,21 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 		}
 	}
 
+	go func() {
+		fmt.Println("[DEBUG] Checking if vellum is installed...")
+		installed, err := a.vellumClient.IsInstalled()
+		fmt.Printf("[DEBUG] Vellum installed: %v, err: %v\n", installed, err)
+		if err == nil && !installed {
+			runtime.EventsEmit(a.ctx, "vellum:bootstrap-prompt", nil)
+		} else if err == nil && installed {
+			runtime.EventsEmit(a.ctx, "vellum:ready", nil)
+		}
+	}()
+
 	return ConnectionResult{
 		Success: true,
 		Message: "Connected successfully",
-		Device:  device,
+		Device:  deviceType,
 	}
 }
 
@@ -494,6 +521,7 @@ func (a *App) Disconnect() {
 		a.client.Close()
 		a.client = nil
 	}
+	a.vellumClient = nil
 }
 
 func (a *App) IsConnected() bool {
@@ -507,13 +535,17 @@ func (a *App) runCommand(cmd string) (string, error) {
 		return "", fmt.Errorf("not connected")
 	}
 
+	fmt.Printf("[DEBUG] runCommand creating session: %s\n", cmd[:min(50, len(cmd))])
 	session, err := a.client.NewSession()
 	if err != nil {
+		fmt.Printf("[DEBUG] runCommand session error: %v\n", err)
 		return "", err
 	}
 	defer session.Close()
 
+	fmt.Printf("[DEBUG] runCommand executing: %s\n", cmd[:min(50, len(cmd))])
 	output, err := session.CombinedOutput(cmd)
+	fmt.Printf("[DEBUG] runCommand done: %s, err: %v\n", cmd[:min(50, len(cmd))], err)
 	return string(output), err
 }
 
@@ -566,7 +598,6 @@ func (a *App) RunCommandWithOutput(cmd string, requiresPTY bool) {
 			fmt.Println("[DEBUG] PTY allocated successfully")
 		}
 
-		// Store session and release lock immediately
 		a.commandSession = session
 		a.mu.Unlock()
 
@@ -599,7 +630,6 @@ func (a *App) RunCommandWithOutput(cmd string, requiresPTY bool) {
 			return
 		}
 
-		// Store stdin reference
 		a.mu.Lock()
 		a.commandStdin = stdin
 		a.mu.Unlock()
@@ -676,11 +706,11 @@ func (a *App) StopCommand() {
 
 func (a *App) GetDeviceInfo() map[string]string {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 
 	info := make(map[string]string)
 
 	if a.client == nil {
+		a.mu.Unlock()
 		return info
 	}
 
@@ -698,8 +728,16 @@ func (a *App) GetDeviceInfo() map[string]string {
 		}
 	}
 
-	if output, err := a.runCommand("test -d /home/root/xovi && echo 'yes' || echo 'no'"); err == nil {
-		info["xovi_installed"] = strings.TrimSpace(output)
+	vellumClient := a.vellumClient
+	a.mu.Unlock()
+
+	if vellumClient != nil {
+		installed, _ := vellumClient.IsInstalled()
+		if installed {
+			info["vellum_installed"] = "yes"
+		} else {
+			info["vellum_installed"] = "no"
+		}
 	}
 
 	return info
@@ -734,45 +772,82 @@ func (a *App) GetUpdateServiceStatus() UpdateServiceStatus {
 	return status
 }
 
-type ComponentInfo struct {
-	ID           string   `json:"id"`
-	Name         string   `json:"name"`
-	Description  string   `json:"description"`
-	Version      string   `json:"version"`
-	Author       string   `json:"author"`
-	Dependencies []string `json:"dependencies"`
-	Category     string   `json:"category"`
-	Tags         []string `json:"tags"`
+type PackageInfo struct {
+	Name           string   `json:"name"`
+	Version        string   `json:"version"`
+	Description    string   `json:"description"`
+	UpstreamAuthor string   `json:"upstreamAuthor"`
+	Category       string   `json:"category"`
+	URL            string   `json:"url"`
+	License        string   `json:"license"`
+	Devices        []string `json:"devices"`
+	Depends        []string `json:"depends"`
+	Conflicts      []string `json:"conflicts"`
+	OSMin          *string  `json:"osMin"`
+	OSMax          *string  `json:"osMax"`
 }
 
-func (a *App) GetComponents() []ComponentInfo {
-	components := component.DefaultRegistry.GetAll()
-	result := make([]ComponentInfo, len(components))
+var hiddenPackages = map[string]bool{
+	"vellum":                 true,
+	"vellum-bash-completion": true,
+	"mount-utils":            true,
+	"/bin/sh":                true,
+}
 
-	for i, comp := range components {
-		result[i] = ComponentInfo{
-			ID:           comp.ID,
-			Name:         comp.Name,
-			Description:  comp.Description,
-			Version:      comp.Version,
-			Author:       comp.Author,
-			Dependencies: comp.Dependencies,
-			Category:     comp.Category,
-			Tags:         comp.Tags,
+func (a *App) GetPackages() []PackageInfo {
+	fmt.Printf("[DEBUG] GetPackages called, metadata=%p\n", a.metadata)
+	packages := a.metadata.GetAllPackages()
+	fmt.Printf("[DEBUG] GetPackages got %d packages\n", len(packages))
+	var result []PackageInfo
+
+	for _, pkg := range packages {
+		if hiddenPackages[pkg.Name] {
+			continue
 		}
+		var visibleDepends []string
+		for _, dep := range pkg.Depends {
+			if !hiddenPackages[dep] {
+				visibleDepends = append(visibleDepends, dep)
+			}
+		}
+		result = append(result, PackageInfo{
+			Name:           pkg.Name,
+			Version:        pkg.Version,
+			Description:    pkg.Description,
+			UpstreamAuthor: pkg.UpstreamAuthor,
+			Category:       pkg.Category,
+			URL:            pkg.URL,
+			License:        pkg.License,
+			Devices:        pkg.Devices,
+			Depends:        visibleDepends,
+			Conflicts:      pkg.Conflicts,
+			OSMin:          pkg.OSMin,
+			OSMax:          pkg.OSMax,
+		})
 	}
 
+	fmt.Printf("[DEBUG] GetPackages returning %d PackageInfo\n", len(result))
 	return result
 }
 
-func (a *App) ResolveDependencies(componentIDs []string) ([]string, error) {
-	resolver := component.NewDependencyResolver(component.DefaultRegistry.GetAllAsMap())
-	return resolver.Resolve(componentIDs)
-}
+func (a *App) GetInstalledPackages() []string {
+	if a.vellumClient == nil {
+		return []string{}
+	}
 
-func (a *App) GetComponentDependents(componentID string) []string {
-	resolver := component.NewDependencyResolver(component.DefaultRegistry.GetAllAsMap())
-	return resolver.GetDependents(componentID)
+	packages, err := a.vellumClient.List()
+	if err != nil {
+		fmt.Printf("Error getting installed packages: %v\n", err)
+		return []string{}
+	}
+
+	var result []string
+	for _, pkg := range packages {
+		if !hiddenPackages[pkg] {
+			result = append(result, pkg)
+		}
+	}
+	return result
 }
 
 type MaintenanceCommandInfo struct {
@@ -783,14 +858,14 @@ type MaintenanceCommandInfo struct {
 	AllowStop        bool   `json:"allowStop"`
 }
 
-func (a *App) GetMaintenanceCommands(componentID string) []MaintenanceCommandInfo {
-	comp := component.DefaultRegistry.Get(componentID)
-	if comp == nil {
+func (a *App) GetMaintenanceCommands(pkgName string) []MaintenanceCommandInfo {
+	commands := a.metadata.GetMaintenanceCommands(pkgName)
+	if commands == nil {
 		return nil
 	}
 
-	result := make([]MaintenanceCommandInfo, len(comp.MaintenanceCommands))
-	for i, cmd := range comp.MaintenanceCommands {
+	result := make([]MaintenanceCommandInfo, len(commands))
+	for i, cmd := range commands {
 		result[i] = MaintenanceCommandInfo{
 			ID:               cmd.ID,
 			Label:            cmd.Label,
@@ -842,8 +917,9 @@ type InstallProgress struct {
 }
 
 type InstallResult struct {
-	Success bool     `json:"success"`
-	Errors  []string `json:"errors"`
+	Success  bool     `json:"success"`
+	Errors   []string `json:"errors"`
+	DNSError bool     `json:"dnsError"`
 }
 
 type DialogRequest struct {
@@ -860,7 +936,7 @@ func (a *App) RespondToDialog(confirmed bool) {
 	}
 }
 
-func (a *App) InstallComponents(componentIDs []string, deviceType string) {
+func (a *App) InstallPackages(packageNames []string, deviceType string) {
 	go func() {
 		a.dialogResponse = make(chan bool, 1)
 		defer func() {
@@ -870,26 +946,43 @@ func (a *App) InstallComponents(componentIDs []string, deviceType string) {
 
 		arch := device.GetArchitecture(component.DeviceType(deviceType))
 
-		// Get current component status
-		componentsStatus := make(map[string]bool)
-		for _, comp := range component.DefaultRegistry.GetAll() {
-			componentsStatus[comp.ID] = a.CheckComponentStatus(comp.ID)
-		}
-
 		ctx := component.CommandContext{
-			Arch:             arch,
-			Device:           component.DeviceType(deviceType),
-			IsInstalled:      false,
-			ComponentsStatus: componentsStatus,
+			Arch:   arch,
+			Device: component.DeviceType(deviceType),
 		}
 
-		// Create executor that emits events
-		exec := &wailsExecutor{app: a}
+		// Proxy download packages first
+		a.mu.Lock()
+		sshClient := a.client
+		a.mu.Unlock()
 
-		inst := installer.NewInstaller(component.DefaultRegistry, exec)
+		if sshClient != nil {
+			proxy := vellum.NewProxy(a.vellumClient, sshClient, string(arch))
+			runtime.EventsEmit(a.ctx, "install:progress", InstallProgress{
+				Status:  "downloading",
+				Message: "Downloading packages via proxy...",
+			})
+
+			err := proxy.ProxyDownload(packageNames, func(msg string) {
+				runtime.EventsEmit(a.ctx, "install:progress", InstallProgress{
+					Status:  "downloading",
+					Message: msg,
+				})
+			})
+			if err != nil {
+				runtime.EventsEmit(a.ctx, "install:complete", InstallResult{
+					Success: false,
+					Errors:  []string{fmt.Sprintf("Proxy download failed: %v", err)},
+				})
+				return
+			}
+		}
+
+		exec := &wailsExecutor{app: a}
+		inst := installer.NewInstaller(a.vellumClient, a.metadata, exec)
 
 		result := inst.Install(
-			componentIDs,
+			packageNames,
 			ctx,
 			func(progress executor.ProgressInfo) {
 				runtime.EventsEmit(a.ctx, "install:progress", InstallProgress{
@@ -927,33 +1020,33 @@ func (a *App) InstallComponents(componentIDs []string, deviceType string) {
 		)
 
 		runtime.EventsEmit(a.ctx, "install:complete", InstallResult{
-			Success: result.Success,
-			Errors:  result.Errors,
+			Success:  result.Success,
+			Errors:   result.Errors,
+			DNSError: result.DNSError,
 		})
 	}()
 }
 
-func (a *App) UninstallComponents(componentIDs []string, deviceType string) {
+func (a *App) UninstallPackages(packageNames []string, deviceType string) {
 	go func() {
+		a.dialogResponse = make(chan bool, 1)
+		defer func() {
+			close(a.dialogResponse)
+			a.dialogResponse = nil
+		}()
+
 		arch := device.GetArchitecture(component.DeviceType(deviceType))
 
-		componentsStatus := make(map[string]bool)
-		for _, comp := range component.DefaultRegistry.GetAll() {
-			componentsStatus[comp.ID] = a.CheckComponentStatus(comp.ID)
-		}
-
 		ctx := component.CommandContext{
-			Arch:             arch,
-			Device:           component.DeviceType(deviceType),
-			IsInstalled:      true,
-			ComponentsStatus: componentsStatus,
+			Arch:   arch,
+			Device: component.DeviceType(deviceType),
 		}
 
 		exec := &wailsExecutor{app: a}
-		inst := installer.NewInstaller(component.DefaultRegistry, exec)
+		inst := installer.NewInstaller(a.vellumClient, a.metadata, exec)
 
 		result := inst.Uninstall(
-			componentIDs,
+			packageNames,
 			ctx,
 			func(progress executor.ProgressInfo) {
 				runtime.EventsEmit(a.ctx, "install:progress", InstallProgress{
@@ -964,28 +1057,53 @@ func (a *App) UninstallComponents(componentIDs []string, deviceType string) {
 					Message:   progress.Message,
 				})
 			},
+			func(hookResult *component.HookExecutionResult) error {
+				if hookResult.DialogConfig != nil {
+					runtime.EventsEmit(a.ctx, "hook:dialog", DialogRequest{
+						Title:             hookResult.DialogConfig.Title,
+						Message:           hookResult.DialogConfig.Message,
+						Steps:             hookResult.DialogConfig.Steps,
+						ConfirmText:       hookResult.DialogConfig.ConfirmText,
+						InProgressMessage: hookResult.DialogConfig.InProgressMessage,
+					})
+
+					confirmed := <-a.dialogResponse
+					if !confirmed {
+						return fmt.Errorf("user cancelled")
+					}
+
+					if hookResult.Command != nil {
+						runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("$ %s\n", hookResult.Command.Script))
+						if err := exec.Execute([]component.CommandResult{*hookResult.Command}); err != nil {
+							return err
+						}
+					}
+				}
+				return nil
+			},
 		)
 
 		runtime.EventsEmit(a.ctx, "install:complete", InstallResult{
-			Success: result.Success,
-			Errors:  result.Errors,
+			Success:  result.Success,
+			Errors:   result.Errors,
+			DNSError: result.DNSError,
 		})
 	}()
 }
 
-func (a *App) RunMaintenanceCommand(componentID, commandID, deviceType string) {
+func (a *App) RunMaintenanceCommand(pkgName, commandID, deviceType string) {
 	go func() {
-		comp := component.DefaultRegistry.Get(componentID)
-		if comp == nil {
-			runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("Component not found: %s\n", componentID))
+		commands := a.metadata.GetMaintenanceCommands(pkgName)
+		if commands == nil {
+			runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("No maintenance commands for package: %s\n", pkgName))
 			runtime.EventsEmit(a.ctx, "command:done", false)
 			return
 		}
 
-		var cmd *component.MaintenanceCommand
-		for i := range comp.MaintenanceCommands {
-			if comp.MaintenanceCommands[i].ID == commandID {
-				cmd = &comp.MaintenanceCommands[i]
+		var cmd *vellum.MaintenanceCommand
+		for i := range commands {
+			if commands[i].ID == commandID {
+				cmd = &commands[i]
 				break
 			}
 		}
@@ -995,24 +1113,48 @@ func (a *App) RunMaintenanceCommand(componentID, commandID, deviceType string) {
 			return
 		}
 
-		arch := device.GetArchitecture(component.DeviceType(deviceType))
-		ctx := component.CommandContext{
-			Arch:             arch,
-			Device:           component.DeviceType(deviceType),
-			IsInstalled:      true,
-			ComponentsStatus: make(map[string]bool),
+		if cmd.Hook != "" {
+			hookFunc := vellum.GetHook(cmd.Hook)
+			if hookFunc != nil {
+				arch := device.GetArchitecture(component.DeviceType(deviceType))
+				ctx := component.CommandContext{
+					Arch:   arch,
+					Device: component.DeviceType(deviceType),
+				}
+
+				hookResult, err := hookFunc(ctx)
+				if err != nil {
+					runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("Hook error: %v\n", err))
+					runtime.EventsEmit(a.ctx, "command:done", false)
+					return
+				}
+
+				if hookResult != nil && hookResult.DialogConfig != nil {
+					a.dialogResponse = make(chan bool, 1)
+					defer func() {
+						close(a.dialogResponse)
+						a.dialogResponse = nil
+					}()
+
+					runtime.EventsEmit(a.ctx, "hook:dialog", DialogRequest{
+						Title:             hookResult.DialogConfig.Title,
+						Message:           hookResult.DialogConfig.Message,
+						Steps:             hookResult.DialogConfig.Steps,
+						ConfirmText:       hookResult.DialogConfig.ConfirmText,
+						InProgressMessage: hookResult.DialogConfig.InProgressMessage,
+					})
+
+					confirmed := <-a.dialogResponse
+					if !confirmed {
+						runtime.EventsEmit(a.ctx, "command:done", false)
+						return
+					}
+				}
+			}
 		}
 
-		cmdResults := cmd.Command(ctx)
-
-		if cmd.NeedsWriteableRoot {
-			cmdResults = commands.WrapWithWriteableRoot(cmdResults, component.DeviceType(deviceType))
-		}
-
-		for _, c := range cmdResults {
-			runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("$ %s\n", c.Script))
-			a.RunCommandWithOutput(c.Script, c.RequiresPTY)
-		}
+		runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("$ %s\n", cmd.Command))
+		a.RunCommandWithOutput(cmd.Command, cmd.RequiresTerminal)
 	}()
 }
 
@@ -1027,17 +1169,11 @@ func (a *App) RunSystemTask(taskID, deviceType string) {
 
 		arch := device.GetArchitecture(component.DeviceType(deviceType))
 		ctx := component.CommandContext{
-			Arch:             arch,
-			Device:           component.DeviceType(deviceType),
-			IsInstalled:      false,
-			ComponentsStatus: make(map[string]bool),
+			Arch:   arch,
+			Device: component.DeviceType(deviceType),
 		}
 
 		cmdResults := task.Command(ctx)
-
-		if task.NeedsWriteableRoot {
-			cmdResults = commands.WrapWithWriteableRoot(cmdResults, component.DeviceType(deviceType))
-		}
 
 		for _, c := range cmdResults {
 			runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("$ %s\n", c.Script))
@@ -1077,11 +1213,22 @@ func (e *wailsExecutor) Execute(cmds []component.CommandResult) error {
 }
 
 func (e *wailsExecutor) ExecuteWithOutput(cmd string) (string, error) {
+	fmt.Printf("[DEBUG] ExecuteWithOutput waiting for lock: %s\n", cmd[:min(50, len(cmd))])
 	e.app.mu.Lock()
-	defer e.app.mu.Unlock()
+	fmt.Printf("[DEBUG] ExecuteWithOutput got lock: %s\n", cmd[:min(50, len(cmd))])
+	defer func() {
+		e.app.mu.Unlock()
+		fmt.Printf("[DEBUG] ExecuteWithOutput released lock: %s\n", cmd[:min(50, len(cmd))])
+	}()
 	return e.app.runCommand(cmd)
 }
 
 func (e *wailsExecutor) ExecuteStreaming(cmd string, onOutput func(line string)) error {
-	return fmt.Errorf("streaming not implemented for wails executor")
+	output, err := e.ExecuteWithOutput(cmd)
+	if onOutput != nil && output != "" {
+		for _, line := range strings.Split(output, "\n") {
+			onOutput(line)
+		}
+	}
+	return err
 }

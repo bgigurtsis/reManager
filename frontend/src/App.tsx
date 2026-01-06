@@ -11,15 +11,19 @@ import { ProgressModal } from '@/components/ProgressModal'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { Loader2, Unplug, Check, AlertTriangle, Trash2, Plus, X } from 'lucide-react'
 
-interface ComponentInfo {
-  id: string
+interface PackageInfo {
   name: string
-  description: string
   version: string
-  author: string
-  dependencies: string[]
+  description: string
+  upstreamAuthor: string
   category: string
-  tags: string[]
+  url: string
+  license: string
+  devices: string[]
+  depends: string[]
+  conflicts: string[]
+  osMin: string | null
+  osMax: string | null
 }
 
 interface MaintenanceCommandInfo {
@@ -100,17 +104,18 @@ declare global {
           DeleteSavedDevice(id: string): Promise<void>
           ConnectToSavedDevice(id: string): Promise<{ success: boolean; message: string; device?: string }>
           UpdateDeviceName(id: string, name: string): Promise<void>
-          CheckComponentStatus(componentId: string): Promise<boolean>
-          GetComponents(): Promise<ComponentInfo[]>
-          ResolveDependencies(componentIds: string[]): Promise<string[]>
-          GetComponentDependents(componentId: string): Promise<string[]>
-          GetMaintenanceCommands(componentId: string): Promise<MaintenanceCommandInfo[]>
+          CheckVellumInstalled(): Promise<boolean>
+          BootstrapVellum(): Promise<void>
+          CheckPackageInstalled(pkgName: string): Promise<boolean>
+          GetPackages(): Promise<PackageInfo[]>
+          GetInstalledPackages(): Promise<string[]>
+          GetMaintenanceCommands(pkgName: string): Promise<MaintenanceCommandInfo[]>
           GetSystemTasksInfo(): Promise<SystemTaskInfo[]>
           GetDeviceDisplayName(machine: string): Promise<string>
           GetDeviceArchitecture(deviceType: string): Promise<string>
-          InstallComponents(componentIds: string[], deviceType: string): Promise<void>
-          UninstallComponents(componentIds: string[], deviceType: string): Promise<void>
-          RunMaintenanceCommand(componentId: string, commandId: string, deviceType: string): Promise<void>
+          InstallPackages(packageNames: string[], deviceType: string): Promise<void>
+          UninstallPackages(packageNames: string[], deviceType: string): Promise<void>
+          RunMaintenanceCommand(pkgName: string, commandId: string, deviceType: string): Promise<void>
           RunSystemTask(taskId: string, deviceType: string): Promise<void>
           RespondToDialog(confirmed: boolean): Promise<void>
         }
@@ -137,7 +142,10 @@ export default function App() {
   const [error, setError] = useState('')
   const [device, setDevice] = useState<string>('')
   const [deviceInfo, setDeviceInfo] = useState<Record<string, string>>({})
-  const [componentStatus, setComponentStatus] = useState<Record<string, boolean>>({})
+  const [installedPackages, setInstalledPackages] = useState<Set<string>>(new Set())
+  const [showBootstrapDialog, setShowBootstrapDialog] = useState(false)
+  const [bootstrapping, setBootstrapping] = useState(false)
+  const [bootstrapOutput, setBootstrapOutput] = useState('')
   const [installing, setInstalling] = useState(false)
   const [output, setOutput] = useState('')
   const [currentComponent, setCurrentComponent] = useState('')
@@ -178,7 +186,7 @@ export default function App() {
   const [progressTotal, setProgressTotal] = useState(0)
   const [progressPercentage, setProgressPercentage] = useState(0)
 
-  const [components, setComponents] = useState<ComponentInfo[]>([])
+  const [packages, setPackages] = useState<PackageInfo[]>([])
   const [systemTasks, setSystemTasks] = useState<SystemTaskInfo[]>([])
   const [maintenanceCommands, setMaintenanceCommands] = useState<Record<string, MaintenanceCommandInfo[]>>({})
 
@@ -198,9 +206,9 @@ export default function App() {
   useEffect(() => {
     const loadInitialData = async () => {
       try {
-        const [keys, comps, tasks, devices] = await Promise.all([
+        const [keys, pkgs, tasks, devices] = await Promise.all([
           window.go.main.App.GetDefaultSSHKeys(),
-          window.go.main.App.GetComponents(),
+          window.go.main.App.GetPackages(),
           window.go.main.App.GetSystemTasksInfo(),
           window.go.main.App.GetSavedDevices(),
         ])
@@ -212,7 +220,7 @@ export default function App() {
           setSelectedKey('__other__')
         }
 
-        setComponents(comps || [])
+        setPackages(pkgs || [])
         setSystemTasks(tasks || [])
         setSavedDevices(devices || [])
       } catch (err) {
@@ -259,16 +267,16 @@ export default function App() {
         setDevice(result.device || 'unknown')
         setDeviceInfo(info)
 
-        const status: Record<string, boolean> = {}
+        const installed = await window.go.main.App.GetInstalledPackages()
+        setInstalledPackages(new Set(installed || []))
+
         const maintCmds: Record<string, MaintenanceCommandInfo[]> = {}
-        for (const comp of components) {
-          status[comp.id] = await window.go.main.App.CheckComponentStatus(comp.id)
-          const cmds = await window.go.main.App.GetMaintenanceCommands(comp.id)
+        for (const pkg of packages) {
+          const cmds = await window.go.main.App.GetMaintenanceCommands(pkg.name)
           if (cmds && cmds.length > 0) {
-            maintCmds[comp.id] = cmds
+            maintCmds[pkg.name] = cmds
           }
         }
-        setComponentStatus(status)
         setMaintenanceCommands(maintCmds)
         setStep('select')
       } else {
@@ -417,7 +425,7 @@ export default function App() {
         setOutput((prev) => prev + `\nErrors occurred:\n${result.errors.join('\n')}\n`)
       }
 
-      await rescanAllComponents()
+      await rescanAllPackages()
 
       setInstalling(false)
       setUninstalling(false)
@@ -436,12 +444,51 @@ export default function App() {
       setShowRebuildDialog(true)
     })
 
+    const unsubscribeBootstrapPrompt = window.runtime.EventsOn('vellum:bootstrap-prompt', () => {
+      console.log('Received vellum:bootstrap-prompt')
+      setShowBootstrapDialog(true)
+    })
+
+    const unsubscribeBootstrapStart = window.runtime.EventsOn('vellum:bootstrap-start', () => {
+      console.log('Received vellum:bootstrap-start')
+      setBootstrapping(true)
+      setBootstrapOutput('')
+    })
+
+    const unsubscribeBootstrapOutput = window.runtime.EventsOn('vellum:bootstrap-output', (...args: unknown[]) => {
+      const line = args[0] as string
+      setBootstrapOutput((prev) => prev + line)
+    })
+
+    const unsubscribeBootstrapComplete = window.runtime.EventsOn('vellum:bootstrap-complete', () => {
+      console.log('Received vellum:bootstrap-complete')
+      setBootstrapping(false)
+      setShowBootstrapDialog(false)
+    })
+
+    const unsubscribeBootstrapError = window.runtime.EventsOn('vellum:bootstrap-error', (...args: unknown[]) => {
+      const errMsg = args[0] as string
+      console.log('Received vellum:bootstrap-error:', errMsg)
+      setBootstrapping(false)
+      setBootstrapOutput((prev) => prev + '\n\nError: ' + errMsg)
+    })
+
+    const unsubscribeVellumReady = window.runtime.EventsOn('vellum:ready', () => {
+      console.log('Received vellum:ready')
+    })
+
     return () => {
       unsubscribeOutput()
       unsubscribeDone()
       unsubscribeProgress()
       unsubscribeComplete()
       unsubscribeDialog()
+      unsubscribeBootstrapPrompt()
+      unsubscribeBootstrapStart()
+      unsubscribeBootstrapOutput()
+      unsubscribeBootstrapComplete()
+      unsubscribeBootstrapError()
+      unsubscribeVellumReady()
     }
   }, [])
 
@@ -467,16 +514,16 @@ export default function App() {
         setDevice(result.device || 'unknown')
         setDeviceInfo(info)
 
-        const status: Record<string, boolean> = {}
+        const installed = await window.go.main.App.GetInstalledPackages()
+        setInstalledPackages(new Set(installed || []))
+
         const maintCmds: Record<string, MaintenanceCommandInfo[]> = {}
-        for (const comp of components) {
-          status[comp.id] = await window.go.main.App.CheckComponentStatus(comp.id)
-          const cmds = await window.go.main.App.GetMaintenanceCommands(comp.id)
+        for (const pkg of packages) {
+          const cmds = await window.go.main.App.GetMaintenanceCommands(pkg.name)
           if (cmds && cmds.length > 0) {
-            maintCmds[comp.id] = cmds
+            maintCmds[pkg.name] = cmds
           }
         }
-        setComponentStatus(status)
         setMaintenanceCommands(maintCmds)
 
         if (saveAfterConnect) {
@@ -541,64 +588,22 @@ export default function App() {
     return machine
   }
 
-  const addToQueue = async (id: string) => {
-    try {
-      const deps = await window.go.main.App.ResolveDependencies([id])
-      const conflicts = deps.filter((depId) => uninstallQueue.has(depId))
-
-      if (conflicts.length > 0) {
-        const conflictNames = conflicts
-          .map((cid) => components.find((c) => c.id === cid)?.name || cid)
-          .join(', ')
-        setQueueError(`Cannot add — ${conflictNames} is queued for removal`)
-        setTimeout(() => setQueueError(null), 4000)
-        return
-      }
-
-      const newQueue = new Set(installQueue)
-      newQueue.add(id)
-      setInstallQueue(newQueue)
-    } catch (err) {
-      console.error('Error adding to queue:', err)
-    }
-  }
-
-  const removeFromQueue = async (id: string) => {
-    const otherItems = Array.from(installQueue).filter((qid) => qid !== id)
-
-    if (otherItems.length === 0) {
-      setInstallQueue(new Set())
+  const addToQueue = (name: string) => {
+    if (uninstallQueue.has(name)) {
+      setQueueError(`Cannot add — ${name} is queued for removal`)
+      setTimeout(() => setQueueError(null), 4000)
       return
     }
 
-    try {
-      const stillNeeded = await window.go.main.App.ResolveDependencies(otherItems)
-      const currentResolved = await window.go.main.App.ResolveDependencies(Array.from(installQueue))
+    const newQueue = new Set(installQueue)
+    newQueue.add(name)
+    setInstallQueue(newQueue)
+  }
 
-      const orphans = currentResolved.filter(
-        (depId) => depId !== id && !stillNeeded.includes(depId) && !installQueue.has(depId)
-      )
-
-      if (orphans.length > 0) {
-        setPendingOrphanRemoval({
-          itemToRemove: id,
-          orphans: orphans.map((oid) => ({
-            id: oid,
-            name: components.find((c) => c.id === oid)?.name || oid,
-          })),
-        })
-        return
-      }
-
-      const newQueue = new Set(installQueue)
-      newQueue.delete(id)
-      setInstallQueue(newQueue)
-    } catch (err) {
-      console.error('Error checking orphans:', err)
-      const newQueue = new Set(installQueue)
-      newQueue.delete(id)
-      setInstallQueue(newQueue)
-    }
+  const removeFromQueue = (name: string) => {
+    const newQueue = new Set(installQueue)
+    newQueue.delete(name)
+    setInstallQueue(newQueue)
   }
 
   const confirmOrphanRemoval = (removeOrphans: boolean) => {
@@ -624,71 +629,36 @@ export default function App() {
   const handleInstallQueue = async () => {
     if (installQueue.size === 0) return
 
-    try {
-      const resolvedIds = await window.go.main.App.ResolveDependencies(Array.from(installQueue))
-      const toInstall = resolvedIds.filter((id) => !componentStatus[id])
+    const toInstall = Array.from(installQueue).filter((name) => !installedPackages.has(name))
 
-      if (toInstall.length === 0) {
-        setInstallQueue(new Set())
-        return
-      }
-
-      setShowProgressModal(true)
-      setProgressModalType('install')
-      setProgressIndex(0)
-      setProgressTotal(toInstall.length)
-      setProgressPercentage(0)
-      setInstalling(true)
-      setOutput('')
-      setCommandContext('install')
-
-      await window.go.main.App.InstallComponents(toInstall, device)
+    if (toInstall.length === 0) {
       setInstallQueue(new Set())
-    } catch (err) {
-      console.error('Error during install:', err)
+      return
     }
+
+    setShowProgressModal(true)
+    setProgressModalType('install')
+    setProgressIndex(0)
+    setProgressTotal(toInstall.length)
+    setProgressPercentage(0)
+    setInstalling(true)
+    setOutput('')
+    setCommandContext('install')
+
+    await window.go.main.App.InstallPackages(toInstall, device)
+    setInstallQueue(new Set())
   }
 
-  const addToUninstallQueue = async (id: string) => {
-    try {
-      if (installQueue.size > 0) {
-        const installQueueDeps = await window.go.main.App.ResolveDependencies(Array.from(installQueue))
-        if (installQueueDeps.includes(id)) {
-          const blockedBy = Array.from(installQueue).find((qid) => {
-            const comp = components.find((c) => c.id === qid)
-            return comp?.dependencies?.includes(id)
-          })
-          const blockedByName = blockedBy
-            ? components.find((c) => c.id === blockedBy)?.name || blockedBy
-            : 'items in install queue'
-          setQueueError(`Cannot remove — required by ${blockedByName}`)
-          setTimeout(() => setQueueError(null), 4000)
-          return
-        }
-      }
-
-      const dependents = await window.go.main.App.GetComponentDependents(id)
-      const installedDependents = dependents.filter((depId) => componentStatus[depId] && !uninstallQueue.has(depId))
-
-      if (installedDependents.length > 0) {
-        const comp = components.find((c) => c.id === id)
-        setPendingUninstall({
-          componentIds: [id],
-          componentNames: [comp?.name || id],
-          dependents: installedDependents.map((depId) => ({
-            id: depId,
-            name: components.find((c) => c.id === depId)?.name || depId,
-          })),
-        })
-        return
-      }
-
-      const newQueue = new Set(uninstallQueue)
-      newQueue.add(id)
-      setUninstallQueue(newQueue)
-    } catch (err) {
-      console.error('Error adding to uninstall queue:', err)
+  const addToUninstallQueue = (name: string) => {
+    if (installQueue.has(name)) {
+      setQueueError(`Cannot remove — ${name} is queued for installation`)
+      setTimeout(() => setQueueError(null), 4000)
+      return
     }
+
+    const newQueue = new Set(uninstallQueue)
+    newQueue.add(name)
+    setUninstallQueue(newQueue)
   }
 
   const confirmUninstallWithDependents = (includeAll: boolean) => {
@@ -731,22 +701,17 @@ export default function App() {
     setMaintenanceOutput('')
     setCommandContext('maintenance')
 
-    await window.go.main.App.UninstallComponents(toUninstall, device)
+    await window.go.main.App.UninstallPackages(toUninstall, device)
     setUninstallQueue(new Set())
   }
 
-  const rescanAllComponents = async () => {
+  const rescanAllPackages = async () => {
     try {
-      const freshComponents = await window.go.main.App.GetComponents()
-
-      const status: Record<string, boolean> = {}
-      for (const comp of freshComponents) {
-        status[comp.id] = await window.go.main.App.CheckComponentStatus(comp.id)
-      }
-      setComponentStatus(status)
+      const installed = await window.go.main.App.GetInstalledPackages()
+      setInstalledPackages(new Set(installed || []))
       return true
     } catch (err) {
-      console.error('Failed to rescan component status:', err)
+      console.error('Failed to rescan package status:', err)
       return false
     }
   }
@@ -1065,33 +1030,38 @@ export default function App() {
                 </CardHeader>
                 <CardContent className="space-y-6">
                   {/* Installed Section */}
-                  {components.filter((c) => componentStatus[c.id]).length > 0 && (
+                  {packages.filter((p) => installedPackages.has(p.name)).length > 0 && (
                     <div>
                       <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
                         Installed
                       </h3>
                       <div className="grid grid-cols-2 gap-4">
-                        {components
-                          .filter((comp) => componentStatus[comp.id])
-                          .map((comp) => {
-                            const isQueued = uninstallQueue.has(comp.id)
+                        {packages
+                          .filter((pkg) => installedPackages.has(pkg.name))
+                          .map((pkg) => {
+                            const isQueued = uninstallQueue.has(pkg.name)
                             return (
                               <div
-                                key={comp.id}
+                                key={pkg.name}
                                 className={`flex flex-col p-4 rounded-lg border transition-colors ${
                                   isQueued ? 'border-destructive bg-destructive/5' : 'border-border'
                                 }`}
                               >
                                 <div className="flex-1">
-                                  <span className="font-medium">{comp.name}</span>
-                                  <p className="text-sm text-muted-foreground mt-1">{comp.description}</p>
+                                  <span className="font-medium">{pkg.name}</span>
+                                  <p className="text-sm text-muted-foreground mt-1">{pkg.description}</p>
+                                  {pkg.upstreamAuthor && (
+                                    <a href={pkg.url} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-500 hover:underline">
+                                      by {pkg.upstreamAuthor}
+                                    </a>
+                                  )}
                                 </div>
                                 <div className="flex justify-end mt-3">
                                   {isQueued ? (
                                     <Button
                                       variant="outline"
                                       size="sm"
-                                      onClick={() => removeFromUninstallQueue(comp.id)}
+                                      onClick={() => removeFromUninstallQueue(pkg.name)}
                                     >
                                       <Check className="h-4 w-4 mr-1" />
                                       Queued
@@ -1100,7 +1070,7 @@ export default function App() {
                                     <Button
                                       variant="outline"
                                       size="sm"
-                                      onClick={() => addToUninstallQueue(comp.id)}
+                                      onClick={() => addToUninstallQueue(pkg.name)}
                                       disabled={installing || uninstalling}
                                     >
                                       <Trash2 className="h-4 w-4 mr-1" />
@@ -1116,29 +1086,34 @@ export default function App() {
                   )}
 
                   {/* Available Section */}
-                  {components.filter((c) => !componentStatus[c.id]).length > 0 && (
+                  {packages.filter((p) => !installedPackages.has(p.name)).length > 0 && (
                     <div>
                       <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
                         Available
                       </h3>
                       <div className="grid grid-cols-2 gap-4">
-                        {components
-                          .filter((comp) => !componentStatus[comp.id])
-                          .map((comp) => {
-                            const isQueued = installQueue.has(comp.id)
+                        {packages
+                          .filter((pkg) => !installedPackages.has(pkg.name))
+                          .map((pkg) => {
+                            const isQueued = installQueue.has(pkg.name)
                             return (
                               <div
-                                key={comp.id}
+                                key={pkg.name}
                                 className={`flex flex-col p-4 rounded-lg border transition-colors ${
                                   isQueued ? 'border-primary bg-primary/5' : 'border-border'
                                 }`}
                               >
                                 <div className="flex-1">
-                                  <span className="font-medium">{comp.name}</span>
-                                  <p className="text-sm text-muted-foreground mt-1">{comp.description}</p>
-                                  {comp.dependencies.length > 0 && (
+                                  <span className="font-medium">{pkg.name}</span>
+                                  <p className="text-sm text-muted-foreground mt-1">{pkg.description}</p>
+                                  {pkg.upstreamAuthor && (
+                                    <a href={pkg.url} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-500 hover:underline">
+                                      by {pkg.upstreamAuthor}
+                                    </a>
+                                  )}
+                                  {pkg.depends && pkg.depends.length > 0 && (
                                     <div className="flex flex-wrap gap-1 mt-2">
-                                      {comp.dependencies.map((dep) => (
+                                      {pkg.depends.map((dep) => (
                                         <span
                                           key={dep}
                                           className="text-xs px-2 py-0.5 rounded bg-secondary text-secondary-foreground"
@@ -1154,7 +1129,7 @@ export default function App() {
                                     <Button
                                       variant="outline"
                                       size="sm"
-                                      onClick={() => removeFromQueue(comp.id)}
+                                      onClick={() => removeFromQueue(pkg.name)}
                                     >
                                       <Check className="h-4 w-4 mr-1" />
                                       Queued
@@ -1163,7 +1138,7 @@ export default function App() {
                                     <Button
                                       variant="outline"
                                       size="sm"
-                                      onClick={() => addToQueue(comp.id)}
+                                      onClick={() => addToQueue(pkg.name)}
                                       disabled={installing || uninstalling}
                                     >
                                       <Plus className="h-4 w-4 mr-1" />
@@ -1178,7 +1153,7 @@ export default function App() {
                     </div>
                   )}
 
-                  {components.length === 0 && (
+                  {packages.length === 0 && (
                     <p className="text-center text-muted-foreground py-8">No mods available</p>
                   )}
 
@@ -1204,16 +1179,15 @@ export default function App() {
                             </Button>
                           </div>
                           <div className="space-y-1 mb-3">
-                            {Array.from(installQueue).map((id) => {
-                              const comp = components.find((c) => c.id === id)
+                            {Array.from(installQueue).map((name) => {
                               return (
                                 <div
-                                  key={id}
+                                  key={name}
                                   className="flex items-center justify-between text-sm py-1"
                                 >
-                                  <span>{comp?.name || id}</span>
+                                  <span>{name}</span>
                                   <button
-                                    onClick={() => removeFromQueue(id)}
+                                    onClick={() => removeFromQueue(name)}
                                     className="text-muted-foreground hover:text-foreground"
                                   >
                                     <X className="h-4 w-4" />
@@ -1251,16 +1225,15 @@ export default function App() {
                             </Button>
                           </div>
                           <div className="space-y-1 mb-3">
-                            {Array.from(uninstallQueue).map((id) => {
-                              const comp = components.find((c) => c.id === id)
+                            {Array.from(uninstallQueue).map((name) => {
                               return (
                                 <div
-                                  key={id}
+                                  key={name}
                                   className="flex items-center justify-between text-sm py-1"
                                 >
-                                  <span>{comp?.name || id}</span>
+                                  <span>{name}</span>
                                   <button
-                                    onClick={() => removeFromUninstallQueue(id)}
+                                    onClick={() => removeFromUninstallQueue(name)}
                                     className="text-muted-foreground hover:text-foreground"
                                   >
                                     <X className="h-4 w-4" />
@@ -1334,28 +1307,28 @@ export default function App() {
                 {/* Component Maintenance Section */}
                 <Card>
                   <CardHeader>
-                    <CardTitle>Component Maintenance</CardTitle>
-                    <CardDescription>Component-specific commands</CardDescription>
+                    <CardTitle>Package Maintenance</CardTitle>
+                    <CardDescription>Package-specific commands</CardDescription>
                   </CardHeader>
                   <CardContent>
-                    {components.filter(c => componentStatus[c.id] && maintenanceCommands[c.id]?.length > 0).length === 0 ? (
+                    {packages.filter(p => installedPackages.has(p.name) && maintenanceCommands[p.name]?.length > 0).length === 0 ? (
                       <p className="text-center text-muted-foreground py-4">
-                        No installed components have maintenance commands
+                        No installed packages have maintenance commands
                       </p>
                     ) : (
                       <div className="space-y-4">
-                        {components.filter(c => componentStatus[c.id] && maintenanceCommands[c.id]).map((component) => (
-                          <div key={component.id}>
-                            <h4 className="font-medium mb-2">{component.name}</h4>
+                        {packages.filter(p => installedPackages.has(p.name) && maintenanceCommands[p.name]).map((pkg) => (
+                          <div key={pkg.name}>
+                            <h4 className="font-medium mb-2">{pkg.name}</h4>
                             <div className="grid grid-cols-3 gap-2">
-                              {maintenanceCommands[component.id]?.map((cmd) => {
-                                const isRunning = currentRunningCommand?.componentId === component.id &&
+                              {maintenanceCommands[pkg.name]?.map((cmd) => {
+                                const isRunning = currentRunningCommand?.componentId === pkg.name &&
                                                  currentRunningCommand?.commandId === cmd.id
 
                                 return (
                                   <div key={cmd.id} className="flex gap-2">
                                     <Button
-                                      onClick={() => handleComponentMaintenance(component.id, cmd.id)}
+                                      onClick={() => handleComponentMaintenance(pkg.name, cmd.id)}
                                       disabled={commandRunning && !isRunning}
                                       variant="outline"
                                       size="sm"
@@ -1597,6 +1570,58 @@ export default function App() {
               Save Device
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Vellum Bootstrap Dialog */}
+      <Dialog open={showBootstrapDialog} onOpenChange={(open) => !bootstrapping && setShowBootstrapDialog(open)}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>
+              {bootstrapping ? 'Installing Vellum...' : 'Install Vellum Package Manager'}
+            </DialogTitle>
+            <DialogDescription>
+              {bootstrapping
+                ? 'Please wait while vellum is being installed on your device.'
+                : 'Vellum package manager is required to install mods. Would you like to install it now?'
+              }
+            </DialogDescription>
+          </DialogHeader>
+          {bootstrapping ? (
+            <div className="space-y-4">
+              <div className="flex items-center gap-2">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                <span className="text-sm">Installing...</span>
+              </div>
+              {bootstrapOutput && (
+                <div className="bg-black rounded-lg p-4 font-mono text-xs text-green-400 max-h-64 overflow-y-auto whitespace-pre-wrap">
+                  {bootstrapOutput}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-4 py-4">
+              <p className="text-sm text-muted-foreground">
+                Vellum is a lightweight package manager for reMarkable devices. It enables easy installation and management of mods and extensions.
+              </p>
+            </div>
+          )}
+          {!bootstrapping && (
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setShowBootstrapDialog(false)
+                  handleDisconnect()
+                }}
+              >
+                Cancel
+              </Button>
+              <Button onClick={() => window.go.main.App.BootstrapVellum()}>
+                Install Vellum
+              </Button>
+            </DialogFooter>
+          )}
         </DialogContent>
       </Dialog>
     </div>

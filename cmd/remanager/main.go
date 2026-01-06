@@ -10,12 +10,11 @@ import (
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/term"
 
-	"reManager/internal/commands"
 	"reManager/internal/component"
-	"reManager/internal/component/definitions"
 	"reManager/internal/device"
 	"reManager/internal/executor"
 	"reManager/internal/installer"
+	"reManager/internal/vellum"
 )
 
 var (
@@ -24,15 +23,11 @@ var (
 	password string
 )
 
-func init() {
-	definitions.RegisterAll(component.DefaultRegistry)
-}
-
 func main() {
 	rootCmd := &cobra.Command{
 		Use:   "remanager",
-		Short: "Manage xovi and extensions on reMarkable devices",
-		Long:  `reManager is a CLI tool for installing and managing xovi and its extensions on reMarkable tablets.`,
+		Short: "Manage vellum packages on reMarkable devices",
+		Long:  `reManager is a CLI tool for installing and managing vellum packages on reMarkable tablets.`,
 	}
 
 	rootCmd.PersistentFlags().StringVarP(&host, "host", "H", "10.11.99.1", "Device hostname or IP address")
@@ -44,6 +39,7 @@ func main() {
 	rootCmd.AddCommand(installCmd())
 	rootCmd.AddCommand(uninstallCmd())
 	rootCmd.AddCommand(maintenanceCmd())
+	rootCmd.AddCommand(bootstrapCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -53,18 +49,40 @@ func main() {
 func listCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
-		Short: "List available components",
+		Short: "List available packages",
 		Run: func(cmd *cobra.Command, args []string) {
-			components := component.DefaultRegistry.GetAll()
+			metadata := vellum.NewMetadataStore()
+			if err := metadata.Load(); err != nil {
+				fmt.Printf("Error loading metadata: %v\n", err)
+				return
+			}
 
-			fmt.Println("Available components:")
+			packages := metadata.GetAllPackages()
+
+			fmt.Println("Available packages:")
 			fmt.Println()
-			for _, comp := range components {
-				deps := ""
-				if len(comp.Dependencies) > 0 {
-					deps = fmt.Sprintf(" (requires: %s)", strings.Join(comp.Dependencies, ", "))
+
+			categories := make(map[string][]vellum.Package)
+			for _, pkg := range packages {
+				cat := pkg.Category
+				if cat == "" {
+					cat = "other"
 				}
-				fmt.Printf("  %s - %s%s\n", comp.ID, comp.Description, deps)
+				categories[cat] = append(categories[cat], pkg)
+			}
+
+			for cat, pkgs := range categories {
+				fmt.Printf("\n[%s]\n", cat)
+				for _, pkg := range pkgs {
+					deps := ""
+					if len(pkg.Depends) > 0 {
+						deps = fmt.Sprintf(" (requires: %s)", strings.Join(pkg.Depends, ", "))
+					}
+					fmt.Printf("  %-25s %s%s\n", pkg.Name, pkg.Description, deps)
+					if pkg.UpstreamAuthor != "" {
+						fmt.Printf("  %-25s by %s\n", "", pkg.UpstreamAuthor)
+					}
+				}
 			}
 		},
 	}
@@ -73,7 +91,7 @@ func listCmd() *cobra.Command {
 func statusCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "status",
-		Short: "Show installed components on connected device",
+		Short: "Show installed packages on connected device",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, deviceType, err := connect()
 			if err != nil {
@@ -82,24 +100,29 @@ func statusCmd() *cobra.Command {
 			defer client.Close()
 
 			exec := executor.NewSSHExecutor(client)
-			components := component.DefaultRegistry.GetAll()
+			vellumClient := vellum.NewClient(exec)
 
 			fmt.Printf("Connected to %s (%s)\n\n", host, device.GetDisplayName(deviceType))
-			fmt.Println("Component Status:")
+
+			installed, err := vellumClient.IsInstalled()
+			if err != nil {
+				return fmt.Errorf("error checking vellum: %w", err)
+			}
+
+			if !installed {
+				fmt.Println("Vellum is not installed. Run 'remanager bootstrap' to install it.")
+				return nil
+			}
+
+			packages, err := vellumClient.List()
+			if err != nil {
+				return fmt.Errorf("error listing packages: %w", err)
+			}
+
+			fmt.Println("Installed packages:")
 			fmt.Println()
-
-			for _, comp := range components {
-				checkCmd := getCheckCommand(comp.ID)
-				if checkCmd == "" {
-					continue
-				}
-
-				installed, _ := exec.CheckInstalled(component.CommandResult{Script: checkCmd})
-				status := "not installed"
-				if installed {
-					status = "installed"
-				}
-				fmt.Printf("  %-25s %s\n", comp.ID, status)
+			for _, pkg := range packages {
+				fmt.Printf("  %s\n", pkg)
 			}
 
 			return nil
@@ -107,10 +130,51 @@ func statusCmd() *cobra.Command {
 	}
 }
 
+func bootstrapCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "bootstrap",
+		Short: "Install vellum package manager on the device",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, deviceType, err := connect()
+			if err != nil {
+				return err
+			}
+			defer client.Close()
+
+			exec := executor.NewSSHExecutor(client)
+			vellumClient := vellum.NewClient(exec)
+
+			fmt.Printf("Connected to %s (%s)\n\n", host, device.GetDisplayName(deviceType))
+
+			installed, err := vellumClient.IsInstalled()
+			if err != nil {
+				return fmt.Errorf("error checking vellum: %w", err)
+			}
+
+			if installed {
+				fmt.Println("Vellum is already installed.")
+				return nil
+			}
+
+			fmt.Println("Installing vellum...")
+			err = vellumClient.Bootstrap(func(line string) {
+				fmt.Print(line)
+			})
+
+			if err != nil {
+				return fmt.Errorf("bootstrap failed: %w", err)
+			}
+
+			fmt.Println("\nVellum installed successfully!")
+			return nil
+		},
+	}
+}
+
 func installCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "install [components...]",
-		Short: "Install components on the device",
+		Use:   "install [packages...]",
+		Short: "Install packages on the device",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, deviceType, err := connect()
@@ -120,25 +184,29 @@ func installCmd() *cobra.Command {
 			defer client.Close()
 
 			exec := executor.NewSSHExecutor(client)
+			vellumClient := vellum.NewClient(exec)
+
+			installed, err := vellumClient.IsInstalled()
+			if err != nil {
+				return fmt.Errorf("error checking vellum: %w", err)
+			}
+
+			if !installed {
+				return fmt.Errorf("vellum is not installed. Run 'remanager bootstrap' first")
+			}
+
+			metadata := vellum.NewMetadataStore()
+			if err := metadata.Load(); err != nil {
+				return fmt.Errorf("error loading metadata: %w", err)
+			}
+
 			arch := device.GetArchitecture(component.DeviceType(deviceType))
-
-			componentsStatus := make(map[string]bool)
-			for _, comp := range component.DefaultRegistry.GetAll() {
-				checkCmd := getCheckCommand(comp.ID)
-				if checkCmd != "" {
-					installed, _ := exec.CheckInstalled(component.CommandResult{Script: checkCmd})
-					componentsStatus[comp.ID] = installed
-				}
-			}
-
 			ctx := component.CommandContext{
-				Arch:             arch,
-				Device:           component.DeviceType(deviceType),
-				IsInstalled:      false,
-				ComponentsStatus: componentsStatus,
+				Arch:   arch,
+				Device: component.DeviceType(deviceType),
 			}
 
-			inst := installer.NewInstaller(component.DefaultRegistry, exec)
+			inst := installer.NewInstaller(vellumClient, metadata, exec)
 
 			result := inst.Install(
 				args,
@@ -189,8 +257,8 @@ func installCmd() *cobra.Command {
 
 func uninstallCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "uninstall [components...]",
-		Short: "Uninstall components from the device",
+		Use:   "uninstall [packages...]",
+		Short: "Uninstall packages from the device",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, deviceType, err := connect()
@@ -200,31 +268,59 @@ func uninstallCmd() *cobra.Command {
 			defer client.Close()
 
 			exec := executor.NewSSHExecutor(client)
+			vellumClient := vellum.NewClient(exec)
+
+			installed, err := vellumClient.IsInstalled()
+			if err != nil {
+				return fmt.Errorf("error checking vellum: %w", err)
+			}
+
+			if !installed {
+				return fmt.Errorf("vellum is not installed")
+			}
+
+			metadata := vellum.NewMetadataStore()
+			if err := metadata.Load(); err != nil {
+				return fmt.Errorf("error loading metadata: %w", err)
+			}
+
 			arch := device.GetArchitecture(component.DeviceType(deviceType))
-
-			componentsStatus := make(map[string]bool)
-			for _, comp := range component.DefaultRegistry.GetAll() {
-				checkCmd := getCheckCommand(comp.ID)
-				if checkCmd != "" {
-					installed, _ := exec.CheckInstalled(component.CommandResult{Script: checkCmd})
-					componentsStatus[comp.ID] = installed
-				}
-			}
-
 			ctx := component.CommandContext{
-				Arch:             arch,
-				Device:           component.DeviceType(deviceType),
-				IsInstalled:      true,
-				ComponentsStatus: componentsStatus,
+				Arch:   arch,
+				Device: component.DeviceType(deviceType),
 			}
 
-			inst := installer.NewInstaller(component.DefaultRegistry, exec)
+			inst := installer.NewInstaller(vellumClient, metadata, exec)
 
 			result := inst.Uninstall(
 				args,
 				ctx,
 				func(progress executor.ProgressInfo) {
 					fmt.Printf("[%d/%d] %s: %s\n", progress.CurrentIndex+1, progress.TotalComponents, progress.CurrentComponent, progress.Message)
+				},
+				func(hookResult *component.HookExecutionResult) error {
+					if hookResult.DialogConfig != nil {
+						fmt.Printf("\n%s\n", hookResult.DialogConfig.Title)
+						fmt.Println(hookResult.DialogConfig.Message)
+						for _, step := range hookResult.DialogConfig.Steps {
+							fmt.Printf("  - %s\n", step)
+						}
+						fmt.Print("\nProceed? [y/N]: ")
+
+						var response string
+						fmt.Scanln(&response)
+						if strings.ToLower(response) != "y" {
+							return fmt.Errorf("user cancelled")
+						}
+
+						if hookResult.Command != nil {
+							fmt.Printf("$ %s\n", hookResult.Command.Script)
+							if err := exec.Execute([]component.CommandResult{*hookResult.Command}); err != nil {
+								return err
+							}
+						}
+					}
+					return nil
 				},
 			)
 
@@ -245,28 +341,33 @@ func uninstallCmd() *cobra.Command {
 
 func maintenanceCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "maintenance <component> <command>",
-		Short: "Run maintenance command for a component",
+		Use:   "maintenance <package> <command>",
+		Short: "Run maintenance command for a package",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			componentID := args[0]
+			pkgName := args[0]
 			commandID := args[1]
 
-			comp := component.DefaultRegistry.Get(componentID)
-			if comp == nil {
-				return fmt.Errorf("component not found: %s", componentID)
+			metadata := vellum.NewMetadataStore()
+			if err := metadata.Load(); err != nil {
+				return fmt.Errorf("error loading metadata: %w", err)
 			}
 
-			var maintCmd *component.MaintenanceCommand
-			for i := range comp.MaintenanceCommands {
-				if comp.MaintenanceCommands[i].ID == commandID {
-					maintCmd = &comp.MaintenanceCommands[i]
+			commands := metadata.GetMaintenanceCommands(pkgName)
+			if commands == nil {
+				return fmt.Errorf("no maintenance commands for package: %s", pkgName)
+			}
+
+			var maintCmd *vellum.MaintenanceCommand
+			for i := range commands {
+				if commands[i].ID == commandID {
+					maintCmd = &commands[i]
 					break
 				}
 			}
 			if maintCmd == nil {
-				fmt.Printf("Available maintenance commands for %s:\n", componentID)
-				for _, c := range comp.MaintenanceCommands {
+				fmt.Printf("Available maintenance commands for %s:\n", pkgName)
+				for _, c := range commands {
 					fmt.Printf("  %s - %s\n", c.ID, c.Description)
 				}
 				return fmt.Errorf("command not found: %s", commandID)
@@ -279,42 +380,54 @@ func maintenanceCmd() *cobra.Command {
 			defer client.Close()
 
 			exec := executor.NewSSHExecutor(client)
-			arch := device.GetArchitecture(component.DeviceType(deviceType))
 
-			ctx := component.CommandContext{
-				Arch:             arch,
-				Device:           component.DeviceType(deviceType),
-				IsInstalled:      true,
-				ComponentsStatus: make(map[string]bool),
-			}
+			if maintCmd.Hook != "" {
+				hookFunc := vellum.GetHook(maintCmd.Hook)
+				if hookFunc != nil {
+					arch := device.GetArchitecture(component.DeviceType(deviceType))
+					ctx := component.CommandContext{
+						Arch:   arch,
+						Device: component.DeviceType(deviceType),
+					}
 
-			cmdResults := maintCmd.Command(ctx)
+					hookResult, err := hookFunc(ctx)
+					if err != nil {
+						return fmt.Errorf("hook error: %w", err)
+					}
 
-			if maintCmd.NeedsWriteableRoot {
-				cmdResults = commands.WrapWithWriteableRoot(cmdResults, component.DeviceType(deviceType))
-			}
+					if hookResult != nil && hookResult.DialogConfig != nil {
+						fmt.Printf("\n%s\n", hookResult.DialogConfig.Title)
+						fmt.Println(hookResult.DialogConfig.Message)
+						for _, step := range hookResult.DialogConfig.Steps {
+							fmt.Printf("  - %s\n", step)
+						}
+						fmt.Print("\nProceed? [y/N]: ")
 
-			fmt.Printf("Running %s %s...\n", componentID, commandID)
-
-			if maintCmd.RequiresTerminal {
-				for _, c := range cmdResults {
-					fmt.Printf("$ %s\n", c.Script)
-					if err := exec.ExecuteStreaming(c.Script, func(line string) {
-						fmt.Print(line)
-					}); err != nil {
-						return fmt.Errorf("command failed: %w", err)
+						var response string
+						fmt.Scanln(&response)
+						if strings.ToLower(response) != "y" {
+							return fmt.Errorf("user cancelled")
+						}
 					}
 				}
+			}
+
+			fmt.Printf("Running %s %s...\n", pkgName, commandID)
+			fmt.Printf("$ %s\n", maintCmd.Command)
+
+			if maintCmd.RequiresTerminal {
+				if err := exec.ExecuteStreaming(maintCmd.Command, func(line string) {
+					fmt.Print(line)
+				}); err != nil {
+					return fmt.Errorf("command failed: %w", err)
+				}
 			} else {
-				for _, c := range cmdResults {
-					fmt.Printf("$ %s\n", c.Script)
-					output, err := exec.ExecuteWithOutput(c.Script)
-					if err != nil {
-						return fmt.Errorf("command failed: %w", err)
-					}
-					if output != "" {
-						fmt.Print(output)
-					}
+				output, err := exec.ExecuteWithOutput(maintCmd.Command)
+				if err != nil {
+					return fmt.Errorf("command failed: %w", err)
+				}
+				if output != "" {
+					fmt.Print(output)
 				}
 			}
 
@@ -410,21 +523,4 @@ func connect() (*ssh.Client, string, error) {
 	}
 
 	return client, deviceType, nil
-}
-
-func getCheckCommand(componentID string) string {
-	switch componentID {
-	case "xovi":
-		return "test -d /home/root/xovi && echo 'yes' || echo 'no'"
-	case "qt-resource-rebuilder":
-		return "test -f /home/root/xovi/extensions.d/qt-resource-rebuilder.so && echo 'yes' || echo 'no'"
-	case "tripletap":
-		return "test -f /home/root/xovi-tripletap/uninstall.sh && echo 'yes' || echo 'no'"
-	case "rm-hacks":
-		return "test -f /home/root/xovi/exthome/qt-resource-rebuilder/zz_rmhacks.qmd && test -d /home/root/xovi/exthome/qt-resource-rebuilder/rmhacks && echo 'yes' || echo 'no'"
-	case "appload":
-		return "test -f /home/root/xovi/extensions.d/appload.so && echo 'yes' || echo 'no'"
-	default:
-		return ""
-	}
 }

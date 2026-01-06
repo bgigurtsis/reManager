@@ -17,10 +17,8 @@ const (
 )
 
 type CommandContext struct {
-	Arch             DeviceArchitecture
-	Device           DeviceType
-	IsInstalled      bool
-	ComponentsStatus map[string]bool
+	Arch   DeviceArchitecture
+	Device DeviceType
 }
 
 type CommandResult struct {
@@ -49,48 +47,3 @@ const (
 	HookTypeConfirmation HookType = "confirmation"
 	HookTypeCustom       HookType = "custom"
 )
-
-type LifecycleHook struct {
-	Type    HookType
-	Execute func(ctx CommandContext) (*HookExecutionResult, error)
-}
-
-type MaintenanceCommand struct {
-	ID                 string
-	Label              string
-	Description        string
-	Command            func(ctx CommandContext) []CommandResult
-	RequiresTerminal   bool
-	AllowStop          bool
-	NeedsWriteableRoot bool
-	Icon               string
-}
-
-type ComponentDefinition struct {
-	ID          string
-	Name        string
-	Description string
-	Version     string
-	Author      string
-
-	Dependencies []string
-
-	CheckInstalled func(ctx CommandContext) CommandResult
-	Install        func(ctx CommandContext) []CommandResult
-	Uninstall      func(ctx CommandContext) []CommandResult
-	Enable         func(ctx CommandContext) *CommandResult
-	Disable        func(ctx CommandContext) *CommandResult
-
-	PreInstall    *LifecycleHook
-	PostInstall   *LifecycleHook
-	PreUninstall  *LifecycleHook
-	PostUninstall *LifecycleHook
-
-	MaintenanceCommands []MaintenanceCommand
-
-	Tags                     []string
-	Category                 string
-	Icon                     string
-	RequiresReboot           bool
-	RequiresUserConfirmation bool
-}
