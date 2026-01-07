@@ -76,20 +76,50 @@ func (c *Client) Update() error {
 }
 
 func (c *Client) List() ([]string, error) {
+	result, err := c.ListWithOsCheck()
+	if err != nil {
+		return nil, err
+	}
+	return result.Packages, nil
+}
+
+type ListResult struct {
+	Packages    []string
+	OsUpgraded  bool
+	PrevVersion string
+	NewVersion  string
+}
+
+var osUpgradeRegex = regexp.MustCompile(`OS updated \(([^\s]+) → ([^\s]+)\)`)
+
+func (c *Client) ListWithOsCheck() (*ListResult, error) {
 	cmd := fmt.Sprintf("%s info -q", VellumBin)
 	output, err := c.executor.ExecuteWithOutput(cmd)
 	if err != nil {
 		return nil, err
 	}
 
-	var packages []string
+	result := &ListResult{}
+
 	for _, line := range strings.Split(output, "\n") {
+		if matches := osUpgradeRegex.FindStringSubmatch(line); len(matches) >= 3 {
+			result.OsUpgraded = true
+			result.PrevVersion = matches[1]
+			result.NewVersion = matches[2]
+			continue
+		}
+
 		pkg := strings.TrimSpace(line)
-		if pkg != "" {
-			packages = append(packages, pkg)
+		if pkg != "" && !strings.HasPrefix(pkg, "Run 'vellum") {
+			result.Packages = append(result.Packages, pkg)
 		}
 	}
-	return packages, nil
+	return result, nil
+}
+
+func (c *Client) ReenableStreaming(onOutput func(line string)) error {
+	cmd := fmt.Sprintf("%s reenable", VellumBin)
+	return c.executor.ExecuteStreaming(cmd, onOutput)
 }
 
 func (c *Client) IsPackageInstalled(pkg string) (bool, error) {

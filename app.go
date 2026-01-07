@@ -435,6 +435,36 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 		User:            "root",
 		Auth:            authMethods,
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		Config: ssh.Config{
+			KeyExchanges: []string{
+				"curve25519-sha256",
+				"curve25519-sha256@libssh.org",
+				"ecdh-sha2-nistp256",
+				"ecdh-sha2-nistp384",
+				"ecdh-sha2-nistp521",
+				"diffie-hellman-group14-sha256",
+				"diffie-hellman-group14-sha1",
+				"diffie-hellman-group1-sha1",
+			},
+			Ciphers: []string{
+				"chacha20-poly1305@openssh.com",
+				"aes256-ctr",
+				"aes128-ctr",
+				"aes256-cbc",
+				"aes128-cbc",
+				"3des-cbc",
+			},
+			MACs: []string{
+				"hmac-sha2-256",
+				"hmac-sha1",
+			},
+		},
+		// Explicit host key algorithms required for Dropbear 2022.83 compatibility
+		HostKeyAlgorithms: []string{
+			ssh.KeyAlgoED25519,
+			ssh.KeyAlgoRSASHA256,
+			ssh.KeyAlgoRSA,
+		},
 	}
 
 	addr := host
@@ -482,6 +512,13 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 			runtime.EventsEmit(a.ctx, "vellum:bootstrap-prompt", nil)
 		} else if err == nil && installed {
 			runtime.EventsEmit(a.ctx, "vellum:ready", nil)
+
+			status := a.CheckHashtabVersion()
+			fmt.Printf("[DEBUG] Hashtab check: installed=%v, hashtabVersion=%s, firmwareVersion=%s, needsRebuild=%v\n",
+				status.Installed, status.HashtabVersion, status.FirmwareVersion, status.NeedsRebuild)
+			if status.NeedsRebuild {
+				runtime.EventsEmit(a.ctx, "hashtab:version-mismatch", status)
+			}
 		}
 	}()
 
@@ -772,6 +809,54 @@ func (a *App) GetUpdateServiceStatus() UpdateServiceStatus {
 	return status
 }
 
+type HashtabVersionStatus struct {
+	Installed       bool   `json:"installed"`
+	HashtabVersion  string `json:"hashtabVersion"`
+	FirmwareVersion string `json:"firmwareVersion"`
+	NeedsRebuild    bool   `json:"needsRebuild"`
+}
+
+func (a *App) CheckHashtabVersion() HashtabVersionStatus {
+	status := HashtabVersionStatus{}
+
+	a.mu.Lock()
+	if a.client == nil {
+		a.mu.Unlock()
+		return status
+	}
+
+	if output, err := a.runCommand("grep REMARKABLE_RELEASE_VERSION /usr/share/remarkable/update.conf"); err == nil {
+		if parts := strings.SplitN(output, "=", 2); len(parts) == 2 {
+			status.FirmwareVersion = strings.TrimSpace(parts[1])
+		}
+	} else if output, err := a.runCommand("grep IMG_VERSION /etc/os-release"); err == nil {
+		if parts := strings.SplitN(output, "=", 2); len(parts) == 2 {
+			status.FirmwareVersion = strings.Trim(strings.TrimSpace(parts[1]), "\"")
+		}
+	}
+	a.mu.Unlock()
+
+	checker := vellum.NewHashtabChecker(&wailsExecutor{app: a})
+
+	exists, err := checker.CheckHashtabExists()
+	if err != nil || !exists {
+		return status
+	}
+	status.Installed = true
+
+	hashtabVersion, err := checker.GetHashtabVersion()
+	if err != nil {
+		return status
+	}
+	status.HashtabVersion = hashtabVersion
+
+	status.NeedsRebuild = status.FirmwareVersion != "" &&
+		status.HashtabVersion != "" &&
+		status.FirmwareVersion != status.HashtabVersion
+
+	return status
+}
+
 type PackageInfo struct {
 	Name           string   `json:"name"`
 	Version        string   `json:"version"`
@@ -850,12 +935,65 @@ func (a *App) GetInstalledPackages() []string {
 	return result
 }
 
+type InstalledPackagesResult struct {
+	Packages    []string `json:"packages"`
+	OsUpgraded  bool     `json:"osUpgraded"`
+	PrevVersion string   `json:"prevVersion"`
+	NewVersion  string   `json:"newVersion"`
+}
+
+func (a *App) GetInstalledPackagesWithOsCheck() InstalledPackagesResult {
+	if a.vellumClient == nil {
+		return InstalledPackagesResult{}
+	}
+
+	listResult, err := a.vellumClient.ListWithOsCheck()
+	if err != nil {
+		fmt.Printf("Error getting installed packages: %v\n", err)
+		return InstalledPackagesResult{}
+	}
+
+	var packages []string
+	for _, pkg := range listResult.Packages {
+		if !hiddenPackages[pkg] {
+			packages = append(packages, pkg)
+		}
+	}
+
+	return InstalledPackagesResult{
+		Packages:    packages,
+		OsUpgraded:  listResult.OsUpgraded,
+		PrevVersion: listResult.PrevVersion,
+		NewVersion:  listResult.NewVersion,
+	}
+}
+
+func (a *App) RunReenable() {
+	if a.vellumClient == nil {
+		return
+	}
+
+	runtime.EventsEmit(a.ctx, "terminal:clear")
+	runtime.EventsEmit(a.ctx, "terminal:output", "Running vellum reenable...\n")
+
+	err := a.vellumClient.ReenableStreaming(func(line string) {
+		runtime.EventsEmit(a.ctx, "terminal:output", line+"\n")
+	})
+
+	if err != nil {
+		runtime.EventsEmit(a.ctx, "terminal:output", fmt.Sprintf("\nError: %v\n", err))
+	} else {
+		runtime.EventsEmit(a.ctx, "terminal:output", "\nReenable completed successfully.\n")
+	}
+}
+
 type MaintenanceCommandInfo struct {
 	ID               string `json:"id"`
 	Label            string `json:"label"`
 	Description      string `json:"description"`
 	RequiresTerminal bool   `json:"requiresTerminal"`
 	AllowStop        bool   `json:"allowStop"`
+	Hook             string `json:"hook,omitempty"`
 }
 
 func (a *App) GetMaintenanceCommands(pkgName string) []MaintenanceCommandInfo {
@@ -872,6 +1010,7 @@ func (a *App) GetMaintenanceCommands(pkgName string) []MaintenanceCommandInfo {
 			Description:      cmd.Description,
 			RequiresTerminal: cmd.RequiresTerminal,
 			AllowStop:        cmd.AllowStop,
+			Hook:             cmd.Hook,
 		}
 	}
 

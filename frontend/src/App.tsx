@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Sheet, SheetContent } from '@/components/ui/sheet'
 import { ProgressModal } from '@/components/ProgressModal'
 import { PackageDetailPanel } from '@/components/PackageDetailPanel'
+import { NotificationBanner } from '@/components/NotificationBanner'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { Badge } from '@/components/ui/badge'
 import { Loader2, Unplug, Check, AlertTriangle, Trash2, Plus, X, Search, ChevronDown } from 'lucide-react'
@@ -35,6 +36,7 @@ interface MaintenanceCommandInfo {
   description: string
   requiresTerminal: boolean
   allowStop: boolean
+  hook?: string
 }
 
 interface SystemTaskInfo {
@@ -96,6 +98,20 @@ interface UninstallSimulationResult {
   recursivePackages: string[] | null
 }
 
+interface InstalledPackagesResult {
+  packages: string[]
+  osUpgraded: boolean
+  prevVersion: string
+  newVersion: string
+}
+
+interface HashtabVersionStatus {
+  installed: boolean
+  hashtabVersion: string
+  firmwareVersion: string
+  needsRebuild: boolean
+}
+
 declare global {
   interface Window {
     go: {
@@ -123,6 +139,8 @@ declare global {
           CheckPackageInstalled(pkgName: string): Promise<boolean>
           GetPackages(): Promise<PackageInfo[]>
           GetInstalledPackages(): Promise<string[]>
+          GetInstalledPackagesWithOsCheck(): Promise<InstalledPackagesResult>
+          RunReenable(): Promise<void>
           GetMaintenanceCommands(pkgName: string): Promise<MaintenanceCommandInfo[]>
           GetSystemTasksInfo(): Promise<SystemTaskInfo[]>
           GetDeviceDisplayName(machine: string): Promise<string>
@@ -167,7 +185,6 @@ export default function App() {
   const [output, setOutput] = useState('')
   const [currentComponent, setCurrentComponent] = useState('')
   const [showRebuildDialog, setShowRebuildDialog] = useState(false)
-  const [rebuildInProgress, setRebuildInProgress] = useState(false)
   const [dialogRequest, setDialogRequest] = useState<DialogRequest | null>(null)
   const connectAttemptRef = useRef(0)
 
@@ -234,6 +251,15 @@ export default function App() {
   } | null>(null)
   const [simulatingInstall, setSimulatingInstall] = useState(false)
   const [simulatingUninstall, setSimulatingUninstall] = useState(false)
+
+  // OS upgrade detection state
+  const [osUpgradeDetected, setOsUpgradeDetected] = useState(false)
+  const [prevOsVersion, setPrevOsVersion] = useState('')
+  const [newOsVersion, setNewOsVersion] = useState('')
+  const [runningReenable, setRunningReenable] = useState(false)
+
+  // Hashtab version mismatch state
+  const [hashtabMismatch, setHashtabMismatch] = useState<HashtabVersionStatus | null>(null)
 
   // Filter state for mod list
   const [search, setSearch] = useState('')
@@ -340,8 +366,15 @@ export default function App() {
         setDevice(result.device || 'unknown')
         setDeviceInfo(info)
 
-        const installed = await window.go.main.App.GetInstalledPackages()
-        setInstalledPackages(new Set(installed || []))
+        console.log('[DEBUG] handleConnectToSavedDevice: calling GetInstalledPackagesWithOsCheck')
+        const installedResult = await window.go.main.App.GetInstalledPackagesWithOsCheck()
+        console.log('[DEBUG] handleConnectToSavedDevice: result =', installedResult)
+        setInstalledPackages(new Set(installedResult.packages || []))
+        if (installedResult.osUpgraded) {
+          setOsUpgradeDetected(true)
+          setPrevOsVersion(installedResult.prevVersion)
+          setNewOsVersion(installedResult.newVersion)
+        }
 
         const maintCmds: Record<string, MaintenanceCommandInfo[]> = {}
         for (const pkg of packages) {
@@ -502,7 +535,6 @@ export default function App() {
       setCommandRunning(false)
       setCurrentComponent('')
       setCommandContext(null)
-      setRebuildInProgress(false)
       setDialogRequest(null)
       setInstallQueue(new Set())
     })
@@ -547,6 +579,12 @@ export default function App() {
       console.log('Received vellum:ready')
     })
 
+    const unsubscribeHashtabMismatch = window.runtime.EventsOn('hashtab:version-mismatch', (...args: unknown[]) => {
+      const status = args[0] as HashtabVersionStatus
+      console.log('Received hashtab:version-mismatch:', status)
+      setHashtabMismatch(status)
+    })
+
     return () => {
       unsubscribeOutput()
       unsubscribeDone()
@@ -559,6 +597,7 @@ export default function App() {
       unsubscribeBootstrapComplete()
       unsubscribeBootstrapError()
       unsubscribeVellumReady()
+      unsubscribeHashtabMismatch()
     }
   }, [])
 
@@ -584,8 +623,15 @@ export default function App() {
         setDevice(result.device || 'unknown')
         setDeviceInfo(info)
 
-        const installed = await window.go.main.App.GetInstalledPackages()
-        setInstalledPackages(new Set(installed || []))
+        console.log('[DEBUG] handleConnect: calling GetInstalledPackagesWithOsCheck')
+        const installedResult = await window.go.main.App.GetInstalledPackagesWithOsCheck()
+        console.log('[DEBUG] handleConnect: result =', installedResult)
+        setInstalledPackages(new Set(installedResult.packages || []))
+        if (installedResult.osUpgraded) {
+          setOsUpgradeDetected(true)
+          setPrevOsVersion(installedResult.prevVersion)
+          setNewOsVersion(installedResult.newVersion)
+        }
 
         const maintCmds: Record<string, MaintenanceCommandInfo[]> = {}
         for (const pkg of packages) {
@@ -807,6 +853,36 @@ export default function App() {
     }
   }
 
+  const handleRunReenable = async () => {
+    setRunningReenable(true)
+    setShowProgressModal(true)
+    setProgressModalType('maintenance')
+    setProgressPercentage(0)
+    setCommandRunning(true)
+    setMaintenanceOutput('')
+    setCommandContext('maintenance')
+
+    await window.go.main.App.RunReenable()
+
+    setRunningReenable(false)
+    setCommandRunning(false)
+    setCommandContext(null)
+    setOsUpgradeDetected(false)
+  }
+
+  const handleHashtabRebuild = async () => {
+    setShowProgressModal(true)
+    setProgressModalType('maintenance')
+    setProgressPercentage(0)
+    setCommandRunning(true)
+    setMaintenanceOutput('')
+    setCommandContext('maintenance')
+
+    await window.go.main.App.RunMaintenanceCommand('qt-resource-rebuilder', 'rebuild_hashtable', device)
+
+    setHashtabMismatch(null)
+  }
+
   const fetchUpdateServiceStatus = async () => {
     try {
       const status = await window.go.main.App.GetUpdateServiceStatus()
@@ -825,10 +901,6 @@ export default function App() {
     setCommandContext('maintenance')
 
     await window.go.main.App.RunSystemTask(taskId, device)
-    await fetchUpdateServiceStatus()
-
-    setCommandRunning(false)
-    setCommandContext(null)
   }
 
   const handleComponentMaintenance = async (componentId: string, commandId: string) => {
@@ -841,7 +913,6 @@ export default function App() {
     if (cmd.allowStop) {
       setCurrentRunningCommand({ componentId, commandId })
     }
-
     setShowProgressModal(true)
     setProgressModalType('maintenance')
     setProgressPercentage(0)
@@ -850,10 +921,6 @@ export default function App() {
     setCommandContext('maintenance')
 
     await window.go.main.App.RunMaintenanceCommand(componentId, commandId, device)
-
-    setCommandRunning(false)
-    setCurrentRunningCommand(null)
-    setCommandContext(null)
   }
 
   const handleStopCommand = async () => {
@@ -941,19 +1008,19 @@ export default function App() {
                           >
                             Remove
                           </Button>
-                          <Button
-                            onClick={() => handleConnectToSavedDevice(savedDevice.id)}
-                            disabled={connecting}
-                          >
-                            {connecting && connectingDeviceId === savedDevice.id ? (
-                              <>
-                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                Connecting...
-                              </>
-                            ) : (
-                              'Connect'
-                            )}
-                          </Button>
+                          {connecting && connectingDeviceId === savedDevice.id ? (
+                            <Button onClick={handleCancelConnect} variant="outline">
+                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                              Cancel
+                            </Button>
+                          ) : (
+                            <Button
+                              onClick={() => handleConnectToSavedDevice(savedDevice.id)}
+                              disabled={connecting}
+                            >
+                              Connect
+                            </Button>
+                          )}
                         </div>
                       </div>
                       {error && connectingDeviceId === savedDevice.id && (
@@ -984,7 +1051,15 @@ export default function App() {
                     <CardTitle>Connect to reMarkable</CardTitle>
                   )}
                   <CardDescription>
-                    Find your IP and password in Settings - General - Help - Copyrights and licenses
+                    Find your IP and password in Settings - General - Help - Copyrights and licenses.
+                    <br />
+                    Paper Pro and Paper Pro Move require{' '}
+                    <button
+                      onClick={() => window.runtime.BrowserOpenURL('https://support.remarkable.com/s/article/Developer-mode')}
+                      className="underline hover:text-foreground">
+                      developer mode
+                    </button>{' '}
+                    to be enabled.
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
@@ -1109,6 +1184,30 @@ export default function App() {
           </>
         )}
 
+        {/* Notification Banners */}
+        {step !== 'connect' && osUpgradeDetected && (
+          <div className="mb-4">
+            <NotificationBanner
+              message={`OS change detected (${prevOsVersion} → ${newOsVersion}). Run reenable to restore system files changed by your mods.`}
+              actionLabel="Run Reenable"
+              onAction={handleRunReenable}
+              onDismiss={() => setOsUpgradeDetected(false)}
+              loading={runningReenable}
+            />
+          </div>
+        )}
+
+        {step !== 'connect' && hashtabMismatch && (
+          <div className="mb-4">
+            <NotificationBanner
+              message={`Hashtable built for OS ${hashtabMismatch.hashtabVersion}, but device is running ${hashtabMismatch.firmwareVersion}. Mods may not work correctly.`}
+              actionLabel="Rebuild Hashtable"
+              onAction={handleHashtabRebuild}
+              onDismiss={() => setHashtabMismatch(null)}
+            />
+          </div>
+        )}
+
         {step !== 'connect' && (
           <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'mods' | 'maintenance')}>
             <TabsList className="grid w-full grid-cols-2 mb-4">
@@ -1160,8 +1259,9 @@ export default function App() {
                             {installedFiltered.map((pkg, index) => {
                               const isQueued = uninstallQueue.has(pkg.name)
                               const prevQueued = index > 0 && uninstallQueue.has(installedFiltered[index - 1].name)
+                              const nextQueued = index < installedFiltered.length - 1 && uninstallQueue.has(installedFiltered[index + 1].name)
                               return (
-                                <div key={pkg.name} className={`py-3 px-6 -mx-6 flex items-center gap-4 transition-colors ${isQueued ? `border-l-4 border-destructive ${!prevQueued ? 'border-t' : ''}` : index % 2 === 1 ? 'bg-muted/50 hover:bg-muted' : 'hover:bg-muted/70'}`}>
+                                <div key={pkg.name} className={`py-3 px-6 -mx-6 flex items-center gap-4 transition-colors ${isQueued ? `border-l-4 border-destructive ${!prevQueued ? 'border-t' : ''} ${!nextQueued ? 'border-b' : ''}` : index % 2 === 1 ? 'bg-muted/50 hover:bg-muted' : 'hover:bg-muted/70'}`}>
                                 <div
                                   className="flex-1 min-w-0 cursor-pointer"
                                   onClick={() => setSelectedPackage(pkg)}
@@ -1224,9 +1324,10 @@ export default function App() {
                             {availableFiltered.map((pkg, index) => {
                               const isQueued = installQueue.has(pkg.name)
                               const prevQueued = index > 0 && installQueue.has(availableFiltered[index - 1].name)
+                              const nextQueued = index < availableFiltered.length - 1 && installQueue.has(availableFiltered[index + 1].name)
                               const conflict = getConflict(pkg)
                               return (
-                                <div key={pkg.name} className={`py-3 px-6 -mx-6 flex items-center gap-4 transition-colors ${isQueued ? `border-l-4 border-primary ${!prevQueued ? 'border-t' : ''}` : index % 2 === 1 ? 'bg-muted/50 hover:bg-muted' : 'hover:bg-muted/70'}`}>
+                                <div key={pkg.name} className={`py-3 px-6 -mx-6 flex items-center gap-4 transition-colors ${isQueued ? `border-l-4 border-primary ${!prevQueued ? 'border-t' : ''} ${!nextQueued ? 'border-b' : ''}` : index % 2 === 1 ? 'bg-muted/50 hover:bg-muted' : 'hover:bg-muted/70'}`}>
                                 <div
                                   className="flex-1 min-w-0 cursor-pointer"
                                   onClick={() => setSelectedPackage(pkg)}
@@ -1654,53 +1755,42 @@ export default function App() {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <AlertTriangle className="h-5 w-5 text-yellow-500" />
-              {rebuildInProgress ? (dialogRequest?.inProgressMessage || 'Processing...') : (dialogRequest?.title || 'Confirmation Required')}
+              {dialogRequest?.title || 'Confirmation Required'}
             </DialogTitle>
             <DialogDescription>
-              {rebuildInProgress ? (
-                <div className="space-y-4 pt-4">
-                  <div className="flex items-center gap-3">
-                    <Loader2 className="h-5 w-5 animate-spin" />
-                    <span>{dialogRequest?.inProgressMessage || 'Please wait...'}</span>
-                  </div>
-                </div>
-              ) : (
-                <div className="space-y-4 pt-4">
-                  <p>{dialogRequest?.message}</p>
-                  {dialogRequest?.steps && dialogRequest.steps.length > 0 && (
-                    <ol className="list-decimal list-inside space-y-1 text-sm">
-                      {dialogRequest.steps.map((step, idx) => (
-                        <li key={idx}>{step}</li>
-                      ))}
-                    </ol>
-                  )}
-                </div>
-              )}
+              <div className="space-y-4 pt-4">
+                <p>{dialogRequest?.message}</p>
+                {dialogRequest?.steps && dialogRequest.steps.length > 0 && (
+                  <ol className="list-decimal list-inside space-y-1 text-sm">
+                    {dialogRequest.steps.map((step, idx) => (
+                      <li key={idx}>{step}</li>
+                    ))}
+                  </ol>
+                )}
+              </div>
             </DialogDescription>
           </DialogHeader>
-          {!rebuildInProgress && (
-            <DialogFooter>
-              <Button
-                variant="outline"
-                onClick={() => {
-                  setShowRebuildDialog(false)
-                  setDialogRequest(null)
-                  window.go.main.App.RespondToDialog(false)
-                }}
-              >
-                Cancel
-              </Button>
-              <Button
-                onClick={() => {
-                  setShowRebuildDialog(false)
-                  setRebuildInProgress(true)
-                  window.go.main.App.RespondToDialog(true)
-                }}
-              >
-                {dialogRequest?.confirmText || 'Proceed'}
-              </Button>
-            </DialogFooter>
-          )}
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowRebuildDialog(false)
+                setDialogRequest(null)
+                window.go.main.App.RespondToDialog(false)
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                setShowRebuildDialog(false)
+                setDialogRequest(null)
+                window.go.main.App.RespondToDialog(true)
+              }}
+            >
+              {dialogRequest?.confirmText || 'Proceed'}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -1733,7 +1823,8 @@ export default function App() {
             const requiredBy: Record<string, string[]> = {}
             for (const pkgName of pendingInstallConfirm.packages) {
               if (!requestedSet.has(pkgName)) {
-                for (const reqPkg of pendingInstallConfirm.requested) {
+                for (const reqPkg of pendingInstallConfirm.packages) {
+                  if (reqPkg === pkgName) continue
                   const pkgInfo = packages.find((p) => p.name === reqPkg)
                   if (pkgInfo?.depends?.includes(pkgName)) {
                     if (!requiredBy[pkgName]) requiredBy[pkgName] = []

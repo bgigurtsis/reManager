@@ -4,7 +4,7 @@
       "maintenanceCommands": [
         {
           "id": "start",
-          "label": "Start Xovi",
+          "label": "Start",
           "description": "Start xovi with the stock interface",
           "command": "/home/root/xovi/start",
           "requiresTerminal": true,
@@ -12,7 +12,7 @@
         },
         {
           "id": "stock",
-          "label": "Restore Stock",
+          "label": "Stock",
           "description": "Restart with stock xochitl interface",
           "command": "/home/root/xovi/stock",
           "requiresTerminal": true,
@@ -20,27 +20,29 @@
         },
         {
           "id": "debug",
-          "label": "Debug Mode",
+          "label": "Debug",
           "description": "Run xovi in debug mode with console output",
           "command": "/home/root/xovi/debug",
           "requiresTerminal": true,
           "allowStop": true
-        },
-        {
-          "id": "rebuild_hashtable",
-          "label": "Rebuild Hashtable",
-          "description": "Rebuild the Qt resource hashtable",
-          "command": "/home/root/xovi/rebuild_hashtable",
-          "requiresTerminal": true,
-          "allowStop": false,
-          "hook": "rebuild_hashtable_dialog"
         }
       ]
     },
     "qt-resource-rebuilder": {
       "hooks": {
         "postInstall": "rebuild_hashtable_dialog"
-      }
+      },
+      "maintenanceCommands": [
+        {
+          "id": "rebuild_hashtable",
+          "label": "Rebuild Hashtable",
+          "description": "Rebuild the Qt resource hashtable",
+          "command": "/home/root/xovi/rebuild_hashtable",
+          "requiresTerminal": false,
+          "allowStop": false,
+          "hook": "rebuild_hashtable_dialog"
+        }
+      ]
     }
   }
 }
