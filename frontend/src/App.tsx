@@ -12,9 +12,11 @@ import { ProgressModal } from '@/components/ProgressModal'
 import { PackageDetailPanel } from '@/components/PackageDetailPanel'
 import { NotificationBanner } from '@/components/NotificationBanner'
 import { UpgradeChecklist } from '@/components/UpgradeChecklist'
+import { VellumInstallPrompt } from '@/components/VellumInstallPrompt'
+import { SettingsDialog } from '@/components/SettingsDialog'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { Badge } from '@/components/ui/badge'
-import { Loader2, Unplug, Check, AlertTriangle, Trash2, Plus, X, Search, ChevronDown } from 'lucide-react'
+import { Loader2, Unplug, Check, AlertTriangle, Trash2, Plus, X, Search, ChevronDown, Settings } from 'lucide-react'
 
 interface PackageInfo {
   name: string
@@ -163,6 +165,10 @@ declare global {
           RunMaintenanceCommand(pkgName: string, commandId: string, deviceType: string): Promise<void>
           RunSystemTask(taskId: string, deviceType: string): Promise<void>
           RespondToDialog(confirmed: boolean): Promise<void>
+          GetAppVersion(): Promise<string>
+          GetSettings(): Promise<{ tabVisibility: Record<string, boolean> }>
+          SaveSettings(tabVisibility: Record<string, boolean>): Promise<void>
+          UninstallVellum(removeAllPackages: boolean): Promise<void>
         }
       }
     }
@@ -189,9 +195,10 @@ export default function App() {
   const [device, setDevice] = useState<string>('')
   const [deviceInfo, setDeviceInfo] = useState<Record<string, string>>({})
   const [installedPackages, setInstalledPackages] = useState<Set<string>>(new Set())
-  const [showBootstrapDialog, setShowBootstrapDialog] = useState(false)
+  const [vellumInstalled, setVellumInstalled] = useState<boolean | null>(null)
   const [bootstrapping, setBootstrapping] = useState(false)
   const [bootstrapOutput, setBootstrapOutput] = useState('')
+  const [bootstrapError, setBootstrapError] = useState<string | null>(null)
   const [installing, setInstalling] = useState(false)
   const [output, setOutput] = useState('')
   const [currentComponent, setCurrentComponent] = useState('')
@@ -225,6 +232,15 @@ export default function App() {
   const [showAutoUpdateBanner, setShowAutoUpdateBanner] = useState(false)
   const [commandContext, setCommandContext] = useState<'install' | 'maintenance' | null>(null)
   const commandContextRef = useRef<'install' | 'maintenance' | null>(null)
+
+  const [showSettingsDialog, setShowSettingsDialog] = useState(false)
+  const [appVersion, setAppVersion] = useState('dev')
+  const [tabVisibility, setTabVisibility] = useState<Record<string, boolean>>({
+    mods: true,
+    maintenance: true,
+  })
+  const [vellumUninstalling, setVellumUninstalling] = useState(false)
+  const [vellumUninstallOutput, setVellumUninstallOutput] = useState('')
 
   const [showProgressModal, setShowProgressModal] = useState(false)
   const [progressModalType, setProgressModalType] = useState<'install' | 'maintenance' | null>(null)
@@ -354,11 +370,13 @@ export default function App() {
     const loadInitialData = async () => {
       try {
         console.log('[DEBUG] loadInitialData: starting')
-        const [keys, pkgs, tasks, devices] = await Promise.all([
+        const [keys, pkgs, tasks, devices, version, settings] = await Promise.all([
           window.go.main.App.GetDefaultSSHKeys(),
           window.go.main.App.GetPackages(),
           window.go.main.App.GetSystemTasksInfo(),
           window.go.main.App.GetSavedDevices(),
+          window.go.main.App.GetAppVersion(),
+          window.go.main.App.GetSettings(),
         ])
         console.log('[DEBUG] loadInitialData: got pkgs', pkgs?.length, pkgs)
 
@@ -372,6 +390,8 @@ export default function App() {
         setPackages(pkgs || [])
         setSystemTasks(tasks || [])
         setSavedDevices(devices || [])
+        setAppVersion(version || 'dev')
+        setTabVisibility(settings?.tabVisibility || { mods: true, maintenance: true })
       } catch (err) {
         console.log('Could not load initial data:', err)
         setSelectedKey('__other__')
@@ -385,6 +405,12 @@ export default function App() {
       fetchUpdateServiceStatus()
     }
   }, [activeTab, step])
+
+  useEffect(() => {
+    if (activeTab === 'mods' && !tabVisibility.mods) {
+      setActiveTab('maintenance')
+    }
+  }, [tabVisibility.mods, activeTab])
 
   const handleKeySelect = async (value: string) => {
     if (value === '__other__') {
@@ -618,13 +644,14 @@ export default function App() {
 
     const unsubscribeBootstrapPrompt = window.runtime.EventsOn('vellum:bootstrap-prompt', () => {
       console.log('Received vellum:bootstrap-prompt')
-      setShowBootstrapDialog(true)
+      setVellumInstalled(false)
     })
 
     const unsubscribeBootstrapStart = window.runtime.EventsOn('vellum:bootstrap-start', () => {
       console.log('Received vellum:bootstrap-start')
       setBootstrapping(true)
       setBootstrapOutput('')
+      setBootstrapError(null)
     })
 
     const unsubscribeBootstrapOutput = window.runtime.EventsOn('vellum:bootstrap-output', (...args: unknown[]) => {
@@ -635,18 +662,44 @@ export default function App() {
     const unsubscribeBootstrapComplete = window.runtime.EventsOn('vellum:bootstrap-complete', () => {
       console.log('Received vellum:bootstrap-complete')
       setBootstrapping(false)
-      setShowBootstrapDialog(false)
+      setVellumInstalled(true)
     })
 
     const unsubscribeBootstrapError = window.runtime.EventsOn('vellum:bootstrap-error', (...args: unknown[]) => {
       const errMsg = args[0] as string
       console.log('Received vellum:bootstrap-error:', errMsg)
       setBootstrapping(false)
-      setBootstrapOutput((prev) => prev + '\n\nError: ' + errMsg)
+      setBootstrapError(errMsg)
     })
 
     const unsubscribeVellumReady = window.runtime.EventsOn('vellum:ready', () => {
       console.log('Received vellum:ready')
+      setVellumInstalled(true)
+    })
+
+    const unsubscribeVellumUninstallStart = window.runtime.EventsOn('vellum:uninstall-start', () => {
+      console.log('Received vellum:uninstall-start')
+      setVellumUninstalling(true)
+      setVellumUninstallOutput('')
+    })
+
+    const unsubscribeVellumUninstallOutput = window.runtime.EventsOn('vellum:uninstall-output', (...args: unknown[]) => {
+      const line = args[0] as string
+      setVellumUninstallOutput((prev) => prev + line)
+    })
+
+    const unsubscribeVellumUninstallComplete = window.runtime.EventsOn('vellum:uninstall-complete', () => {
+      console.log('Received vellum:uninstall-complete')
+      setVellumUninstalling(false)
+      setVellumInstalled(false)
+      setShowSettingsDialog(false)
+    })
+
+    const unsubscribeVellumUninstallError = window.runtime.EventsOn('vellum:uninstall-error', (...args: unknown[]) => {
+      const errMsg = args[0] as string
+      console.log('Received vellum:uninstall-error:', errMsg)
+      setVellumUninstalling(false)
+      setVellumUninstallOutput((prev) => prev + '\nError: ' + errMsg)
     })
 
     const unsubscribeHashtabMismatch = window.runtime.EventsOn('hashtab:version-mismatch', (...args: unknown[]) => {
@@ -707,6 +760,10 @@ export default function App() {
       unsubscribeBootstrapComplete()
       unsubscribeBootstrapError()
       unsubscribeVellumReady()
+      unsubscribeVellumUninstallStart()
+      unsubscribeVellumUninstallOutput()
+      unsubscribeVellumUninstallComplete()
+      unsubscribeVellumUninstallError()
       unsubscribeHashtabMismatch()
       unsubscribeOsMismatch()
       unsubscribeUpgradeBlocked()
@@ -833,6 +890,21 @@ export default function App() {
     setCurrentOsVersion('')
     setChecklistLoading(false)
     setError('')
+    setVellumInstalled(null)
+    setBootstrapping(false)
+    setBootstrapOutput('')
+    setBootstrapError(null)
+    setVellumUninstalling(false)
+    setVellumUninstallOutput('')
+  }
+
+  const handleSaveSettings = async (newTabVisibility: Record<string, boolean>) => {
+    setTabVisibility(newTabVisibility)
+    await window.go.main.App.SaveSettings(newTabVisibility)
+  }
+
+  const handleUninstallVellum = (removeAllPackages: boolean) => {
+    window.go.main.App.UninstallVellum(removeAllPackages)
   }
 
   const getDisplayName = (machine: string) => {
@@ -1132,11 +1204,21 @@ export default function App() {
             <h1 className="text-3xl font-bold text-foreground">reManager</h1>
             <p className="text-muted-foreground">Manage packages on your reMarkable</p>
           </div>
-          {device && (
-            <div className="flex items-center gap-2 text-sm">
+          <div className="flex items-center gap-2 text-sm">
+            {device && (
               <span className="text-muted-foreground">
                 {getDisplayName(deviceInfo.machine || device)} ({deviceInfo.firmware || 'unknown firmware'})
               </span>
+            )}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="sm" onClick={() => setShowSettingsDialog(true)}>
+                  <Settings className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Settings</TooltipContent>
+            </Tooltip>
+            {device && (
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button variant="ghost" size="sm" onClick={handleDisconnect}>
@@ -1145,8 +1227,8 @@ export default function App() {
                 </TooltipTrigger>
                 <TooltipContent>Disconnect</TooltipContent>
               </Tooltip>
-            </div>
-          )}
+            )}
+          </div>
         </div>
 
         {step === 'connect' && (
@@ -1393,13 +1475,21 @@ export default function App() {
 
         {step !== 'connect' && (
           <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'mods' | 'maintenance')}>
-            <TabsList className="grid w-full grid-cols-2 mb-4">
-              <TabsTrigger value="mods">Mods</TabsTrigger>
+            <TabsList className={`grid w-full mb-4 ${tabVisibility.mods ? 'grid-cols-2' : 'grid-cols-1'}`}>
+              {tabVisibility.mods && <TabsTrigger value="mods">Mods</TabsTrigger>}
               <TabsTrigger value="maintenance">Maintenance</TabsTrigger>
             </TabsList>
 
+            {tabVisibility.mods && (
             <TabsContent value="mods">
-              {osMismatchDetected && compatibilityStatus ? (
+              {vellumInstalled === false ? (
+                <VellumInstallPrompt
+                  bootstrapping={bootstrapping}
+                  bootstrapOutput={bootstrapOutput}
+                  bootstrapError={bootstrapError}
+                  onInstall={() => window.go.main.App.BootstrapVellum()}
+                />
+              ) : osMismatchDetected && compatibilityStatus ? (
                 <div className={uninstallQueue.size > 0 ? 'pb-48' : ''}>
                   <UpgradeChecklist
                     storedOsVersion={compatibilityStatus.storedOsVersion || storedOsVersion}
@@ -1786,6 +1876,7 @@ export default function App() {
                 </div>
               )}
             </TabsContent>
+            )}
 
             <TabsContent value="maintenance">
               <div className="space-y-6">
@@ -2220,57 +2311,6 @@ export default function App() {
         </DialogContent>
       </Dialog>
 
-      {/* Vellum Bootstrap Dialog */}
-      <Dialog open={showBootstrapDialog} onOpenChange={(open) => !bootstrapping && setShowBootstrapDialog(open)}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>
-              {bootstrapping ? 'Installing Vellum...' : 'Install Vellum Package Manager'}
-            </DialogTitle>
-            <DialogDescription>
-              {bootstrapping
-                ? 'Please wait while vellum is being installed on your device.'
-                : 'Vellum package manager is required to install mods. Would you like to install it now?'
-              }
-            </DialogDescription>
-          </DialogHeader>
-          {bootstrapping ? (
-            <div className="space-y-4">
-              <div className="flex items-center gap-2">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                <span className="text-sm">Installing...</span>
-              </div>
-              {bootstrapOutput && (
-                <div className="bg-black rounded-lg p-4 font-mono text-xs text-green-400 max-h-64 overflow-y-auto whitespace-pre-wrap">
-                  {bootstrapOutput}
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="space-y-4 py-4">
-              <p className="text-sm text-muted-foreground">
-                Vellum is a lightweight package manager for reMarkable devices. It enables easy installation and management of mods and extensions.
-              </p>
-            </div>
-          )}
-          {!bootstrapping && (
-            <DialogFooter>
-              <Button
-                variant="outline"
-                onClick={() => {
-                  setShowBootstrapDialog(false)
-                  handleDisconnect()
-                }}
-              >
-                Cancel
-              </Button>
-              <Button onClick={() => window.go.main.App.BootstrapVellum()}>
-                Install Vellum
-              </Button>
-            </DialogFooter>
-          )}
-        </DialogContent>
-      </Dialog>
 
       {/* Package Detail Side Panel */}
       <Sheet open={selectedPackage !== null} onOpenChange={(open) => !open && setSelectedPackage(null)}>
@@ -2299,6 +2339,20 @@ export default function App() {
           )}
         </SheetContent>
       </Sheet>
+
+      <SettingsDialog
+        open={showSettingsDialog}
+        onOpenChange={setShowSettingsDialog}
+        isConnected={!!device}
+        vellumInstalled={vellumInstalled}
+        tabVisibility={tabVisibility}
+        onSaveSettings={handleSaveSettings}
+        onUninstallVellum={handleUninstallVellum}
+        uninstalling={vellumUninstalling}
+        uninstallOutput={vellumUninstallOutput}
+        appVersion={appVersion}
+      />
+
     </div>
   )
 }

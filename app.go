@@ -35,6 +35,7 @@ type App struct {
 	commandStdin   io.WriteCloser
 	dialogResponse chan bool
 	deviceStore    *storage.DeviceStore
+	settingsStore  *storage.SettingsStore
 	vellumClient   *vellum.Client
 	metadata       *vellum.MetadataStore
 }
@@ -50,6 +51,12 @@ func (a *App) startup(ctx context.Context) {
 		fmt.Printf("Warning: could not initialize device store: %v\n", err)
 	}
 	a.deviceStore = store
+
+	settingsStore, err := storage.NewSettingsStore()
+	if err != nil {
+		fmt.Printf("Warning: could not initialize settings store: %v\n", err)
+	}
+	a.settingsStore = settingsStore
 
 	a.metadata = vellum.NewMetadataStore()
 	if err := a.metadata.Load(); err != nil {
@@ -270,7 +277,7 @@ func (a *App) CancelConnect() {
 }
 
 func (a *App) dialWithContext(ctx context.Context, addr string, config *ssh.ClientConfig) (*ssh.Client, error) {
-	d := net.Dialer{}
+	d := net.Dialer{Timeout: 10 * time.Second}
 	conn, err := d.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return nil, err
@@ -1711,4 +1718,68 @@ func (e *wailsExecutor) ExecuteStreaming(cmd string, onOutput func(line string))
 		}
 	}
 	return err
+}
+
+func (a *App) GetAppVersion() string {
+	return version
+}
+
+type SettingsInfo struct {
+	TabVisibility map[string]bool `json:"tabVisibility"`
+}
+
+func (a *App) GetSettings() SettingsInfo {
+	if a.settingsStore == nil {
+		return SettingsInfo{
+			TabVisibility: map[string]bool{"mods": true, "maintenance": true},
+		}
+	}
+	settings, err := a.settingsStore.Load()
+	if err != nil {
+		return SettingsInfo{
+			TabVisibility: map[string]bool{"mods": true, "maintenance": true},
+		}
+	}
+	return SettingsInfo{
+		TabVisibility: map[string]bool{
+			"mods":        settings.TabVisibility.Mods,
+			"maintenance": settings.TabVisibility.Maintenance,
+		},
+	}
+}
+
+func (a *App) SaveSettings(tabVisibility map[string]bool) error {
+	if a.settingsStore == nil {
+		return fmt.Errorf("settings store not initialized")
+	}
+	settings := &storage.Settings{
+		TabVisibility: storage.TabVisibility{
+			Mods:        tabVisibility["mods"],
+			Maintenance: tabVisibility["maintenance"],
+		},
+	}
+	return a.settingsStore.Save(settings)
+}
+
+func (a *App) UninstallVellum(removeAllPackages bool) {
+	go func() {
+		if a.vellumClient == nil {
+			runtime.EventsEmit(a.ctx, "vellum:uninstall-error", "Not connected")
+			return
+		}
+
+		runtime.EventsEmit(a.ctx, "vellum:uninstall-start")
+
+		err := a.vellumClient.UninstallVellum(removeAllPackages, func(line string) {
+			runtime.EventsEmit(a.ctx, "vellum:uninstall-output", line)
+		})
+
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "vellum:uninstall-error", err.Error())
+			return
+		}
+
+		a.vellumClient = nil
+		runtime.EventsEmit(a.ctx, "vellum:uninstall-complete")
+	}()
 }
