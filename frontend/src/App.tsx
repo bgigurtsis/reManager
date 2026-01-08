@@ -11,6 +11,7 @@ import { Sheet, SheetContent } from '@/components/ui/sheet'
 import { ProgressModal } from '@/components/ProgressModal'
 import { PackageDetailPanel } from '@/components/PackageDetailPanel'
 import { NotificationBanner } from '@/components/NotificationBanner'
+import { UpgradeChecklist } from '@/components/UpgradeChecklist'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { Badge } from '@/components/ui/badge'
 import { Loader2, Unplug, Check, AlertTriangle, Trash2, Plus, X, Search, ChevronDown } from 'lucide-react'
@@ -141,6 +142,15 @@ declare global {
           GetInstalledPackages(): Promise<string[]>
           GetInstalledPackagesWithOsCheck(): Promise<InstalledPackagesResult>
           RunReenable(): Promise<void>
+          RunUpgrade(): Promise<void>
+          GetPackageCompatibilityStatus(): Promise<{
+            installedPackages: string[]
+            compatiblePackages: string[]
+            incompatiblePackages: string[]
+            currentOsVersion: string
+            storedOsVersion: string
+            fetchFailed: boolean
+          }>
           GetMaintenanceCommands(pkgName: string): Promise<MaintenanceCommandInfo[]>
           GetSystemTasksInfo(): Promise<SystemTaskInfo[]>
           GetDeviceDisplayName(machine: string): Promise<string>
@@ -252,11 +262,25 @@ export default function App() {
   const [simulatingInstall, setSimulatingInstall] = useState(false)
   const [simulatingUninstall, setSimulatingUninstall] = useState(false)
 
-  // OS upgrade detection state
+  // OS upgrade detection state (reactive - from vellum list)
   const [osUpgradeDetected, setOsUpgradeDetected] = useState(false)
   const [prevOsVersion, setPrevOsVersion] = useState('')
   const [newOsVersion, setNewOsVersion] = useState('')
   const [runningReenable, setRunningReenable] = useState(false)
+
+  // OS mismatch detection state (proactive - at connection time)
+  const [osMismatchDetected, setOsMismatchDetected] = useState(false)
+  const [storedOsVersion, setStoredOsVersion] = useState('')
+  const [currentOsVersion, setCurrentOsVersion] = useState('')
+  const [checklistLoading, setChecklistLoading] = useState(false)
+  const [compatibilityStatus, setCompatibilityStatus] = useState<{
+    installedPackages: string[]
+    compatiblePackages: string[]
+    incompatiblePackages: string[]
+    currentOsVersion: string
+    storedOsVersion: string
+    fetchFailed: boolean
+  } | null>(null)
 
   // Hashtab version mismatch state
   const [hashtabMismatch, setHashtabMismatch] = useState<HashtabVersionStatus | null>(null)
@@ -271,10 +295,34 @@ export default function App() {
     return Array.from(cats).sort()
   }, [packages])
 
+  const compareVersions = (a: string, b: string): number => {
+    const aParts = a.split('.').map(p => parseInt(p.split('-')[0], 10) || 0)
+    const bParts = b.split('.').map(p => parseInt(p.split('-')[0], 10) || 0)
+    const maxLen = Math.max(aParts.length, bParts.length)
+    for (let i = 0; i < maxLen; i++) {
+      const aNum = aParts[i] || 0
+      const bNum = bParts[i] || 0
+      if (aNum > bNum) return 1
+      if (aNum < bNum) return -1
+    }
+    return 0
+  }
+
+  const isPackageCompatible = (pkg: PackageInfo, osVersion: string): boolean => {
+    if (!osVersion) return true
+    if (pkg.osMin && compareVersions(osVersion, pkg.osMin) < 0) return false
+    if (pkg.osMax && compareVersions(osVersion, pkg.osMax) >= 0) return false
+    return true
+  }
+
   const filteredPackages = useMemo(() => {
+    const firmware = deviceInfo.firmware || ''
     return [...packages]
       .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
       .filter(pkg => {
+        if (!isPackageCompatible(pkg, firmware)) {
+          return false
+        }
         if (search && !pkg.name.toLowerCase().includes(search.toLowerCase()) &&
             !pkg.description.toLowerCase().includes(search.toLowerCase())) {
           return false
@@ -284,7 +332,7 @@ export default function App() {
         }
         return true
       })
-  }, [packages, search, categoryFilter])
+  }, [packages, search, categoryFilter, deviceInfo.firmware])
 
   const installedFiltered = useMemo(() =>
     filteredPackages.filter(pkg => installedPackages.has(pkg.name)),
@@ -331,7 +379,7 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    if (activeTab === 'maintenance' && step === 'install') {
+    if (activeTab === 'maintenance' && step !== 'connect') {
       fetchUpdateServiceStatus()
     }
   }, [activeTab, step])
@@ -481,7 +529,7 @@ export default function App() {
       }
     })
 
-    const unsubscribeDone = window.runtime.EventsOn('command:done', (...args: unknown[]) => {
+    const unsubscribeDone = window.runtime.EventsOn('command:done', async (...args: unknown[]) => {
       const success = args[0] as boolean
       console.log('Received command:done:', success)
       setCommandRunning(false)
@@ -491,6 +539,11 @@ export default function App() {
         } else {
           setOutput((prev) => prev + '\n[Command failed]\n')
         }
+      }
+      // Refresh update service status after maintenance commands
+      if (commandContextRef.current === 'maintenance') {
+        const status = await window.go.main.App.GetUpdateServiceStatus()
+        setUpdateServiceStatus(status)
       }
     })
 
@@ -529,6 +582,21 @@ export default function App() {
       }
 
       await rescanAllPackages()
+
+      // Re-check OS compatibility after uninstall (packages may now be compatible)
+      if (osMismatchDetected) {
+        window.go.main.App.GetPackageCompatibilityStatus().then(status => {
+          setCompatibilityStatus(status)
+        }).catch(() => {})
+      }
+
+      // Re-check hashtab version (installs may update the hashtab)
+      const hashtabStatus = await window.go.main.App.CheckHashtabVersion()
+      if (hashtabStatus.needsRebuild) {
+        setHashtabMismatch(hashtabStatus)
+      } else {
+        setHashtabMismatch(null)
+      }
 
       setInstalling(false)
       setUninstalling(false)
@@ -585,6 +653,41 @@ export default function App() {
       setHashtabMismatch(status)
     })
 
+    const unsubscribeOsMismatch = window.runtime.EventsOn('os:mismatch', (...args: unknown[]) => {
+      const data = args[0] as { prevVersion: string; newVersion: string }
+      console.log('Received os:mismatch:', data)
+      setOsMismatchDetected(true)
+      setStoredOsVersion(data.prevVersion)
+      setCurrentOsVersion(data.newVersion)
+    })
+
+    const unsubscribeUpgradeBlocked = window.runtime.EventsOn('upgrade:blocked', (...args: unknown[]) => {
+      const compat = args[0] as {
+        compatible: string[]
+        incompatible: string[]
+        noConstraint: string[]
+        fetchFailed: boolean
+      }
+      console.log('Received upgrade:blocked:', compat)
+      setChecklistLoading(false)
+    })
+
+    const unsubscribeUpgradeError = window.runtime.EventsOn('upgrade:error', (...args: unknown[]) => {
+      const errMsg = args[0] as string
+      console.log('Received upgrade:error:', errMsg)
+      setChecklistLoading(false)
+    })
+
+    const unsubscribeUpgradeComplete = window.runtime.EventsOn('upgrade:complete', (...args: unknown[]) => {
+      const success = args[0] as boolean
+      console.log('Received upgrade:complete:', success)
+      setChecklistLoading(false)
+      if (success) {
+        setOsMismatchDetected(false)
+        setCompatibilityStatus(null)
+      }
+    })
+
     return () => {
       unsubscribeOutput()
       unsubscribeDone()
@@ -598,8 +701,24 @@ export default function App() {
       unsubscribeBootstrapError()
       unsubscribeVellumReady()
       unsubscribeHashtabMismatch()
+      unsubscribeOsMismatch()
+      unsubscribeUpgradeBlocked()
+      unsubscribeUpgradeError()
+      unsubscribeUpgradeComplete()
     }
   }, [])
+
+  useEffect(() => {
+    if (osMismatchDetected && !compatibilityStatus) {
+      setChecklistLoading(true)
+      window.go.main.App.GetPackageCompatibilityStatus().then(status => {
+        setCompatibilityStatus(status)
+        setChecklistLoading(false)
+      }).catch(() => {
+        setChecklistLoading(false)
+      })
+    }
+  }, [osMismatchDetected, compatibilityStatus])
 
   const handleConnect = async (saveAfterConnect: boolean) => {
     const thisAttempt = ++connectAttemptRef.current
@@ -694,8 +813,18 @@ export default function App() {
     setStep('connect')
     setDevice('')
     setDeviceInfo({})
+    setInstalledPackages(new Set())
     setInstallQueue(new Set())
+    setUninstallQueue(new Set())
     setOutput('')
+    setHashtabMismatch(null)
+    setOsMismatchDetected(false)
+    setOsUpgradeDetected(false)
+    setCompatibilityStatus(null)
+    setStoredOsVersion('')
+    setCurrentOsVersion('')
+    setChecklistLoading(false)
+    setError('')
   }
 
   const getDisplayName = (machine: string) => {
@@ -881,6 +1010,38 @@ export default function App() {
     await window.go.main.App.RunMaintenanceCommand('qt-resource-rebuilder', 'rebuild_hashtable', device)
 
     setHashtabMismatch(null)
+  }
+
+  const handleChecklistUpgrade = async () => {
+    setChecklistLoading(true)
+    setShowProgressModal(true)
+    setProgressModalType('maintenance')
+    setProgressPercentage(0)
+    setCommandRunning(true)
+    setMaintenanceOutput('')
+    setCommandContext('maintenance')
+
+    await window.go.main.App.RunUpgrade()
+
+    setChecklistLoading(false)
+    setCommandRunning(false)
+    setCommandContext(null)
+  }
+
+  const handleChecklistReenable = async () => {
+    setChecklistLoading(true)
+    setShowProgressModal(true)
+    setProgressModalType('maintenance')
+    setProgressPercentage(0)
+    setCommandRunning(true)
+    setMaintenanceOutput('')
+    setCommandContext('maintenance')
+
+    await window.go.main.App.RunReenable()
+
+    setChecklistLoading(false)
+    setCommandRunning(false)
+    setCommandContext(null)
   }
 
   const fetchUpdateServiceStatus = async () => {
@@ -1197,7 +1358,7 @@ export default function App() {
           </div>
         )}
 
-        {step !== 'connect' && hashtabMismatch && (
+        {step !== 'connect' && hashtabMismatch && !osMismatchDetected && (
           <div className="mb-4">
             <NotificationBanner
               message={`Hashtable built for OS ${hashtabMismatch.hashtabVersion}, but device is running ${hashtabMismatch.firmwareVersion}. Mods may not work correctly.`}
@@ -1216,6 +1377,23 @@ export default function App() {
             </TabsList>
 
             <TabsContent value="mods">
+              {osMismatchDetected && compatibilityStatus ? (
+                <div className={uninstallQueue.size > 0 ? 'pb-48' : ''}>
+                  <UpgradeChecklist
+                    storedOsVersion={compatibilityStatus.storedOsVersion || storedOsVersion}
+                    currentOsVersion={compatibilityStatus.currentOsVersion || currentOsVersion}
+                    compatiblePackages={compatibilityStatus.compatiblePackages || []}
+                    incompatiblePackages={compatibilityStatus.incompatiblePackages || []}
+                    loading={checklistLoading}
+                    fetchFailed={compatibilityStatus.fetchFailed || false}
+                    uninstallQueue={uninstallQueue}
+                    onAddToUninstallQueue={addToUninstallQueue}
+                    onRemoveFromUninstallQueue={removeFromUninstallQueue}
+                    onRunUpgrade={handleChecklistUpgrade}
+                    onRunReenable={handleChecklistReenable}
+                  />
+                </div>
+              ) : (
               <div className={`space-y-6 ${(installQueue.size > 0 || uninstallQueue.size > 0) ? 'pb-48' : ''}`}>
                   {/* Filters */}
                   <div className="flex gap-2">
@@ -1400,190 +1578,191 @@ export default function App() {
                       {queueError}
                     </div>
                   )}
+                </div>
+              )}
 
-                  {/* Queue Section */}
-                  {(installQueue.size > 0 || uninstallQueue.size > 0) && (
-                    <div className="fixed bottom-0 left-0 right-0 py-4 px-6 bg-background border-t shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] z-50 space-y-4">
-                      {/* Install Queue */}
-                      {installQueue.size > 0 && (
-                        <div>
-                          <div
-                            className="flex items-center mb-2 cursor-pointer select-none"
-                            onClick={() => setInstallQueueExpanded(!installQueueExpanded)}
-                          >
-                            <span className="text-sm font-medium flex items-center gap-2">
-                              Install Queue ({installQueue.size})
-                              <ChevronDown className={`h-4 w-4 transition-transform ${installQueueExpanded ? '' : '-rotate-90'}`} />
-                            </span>
-                          </div>
-                          {installQueueExpanded && (
-                            <div className="space-y-1 mb-3">
-                              {Array.from(installQueue).map((name) => {
-                                return (
-                                  <div
-                                    key={name}
-                                    className="flex items-center justify-between text-sm py-1"
-                                  >
-                                    <span>{name}</span>
-                                    <button
-                                      onClick={() => removeFromQueue(name)}
-                                      className="text-muted-foreground hover:text-foreground"
-                                    >
-                                      <X className="h-4 w-4" />
-                                    </button>
-                                  </div>
-                                )
-                              })}
-                            </div>
-                          )}
-                          <div className="flex gap-2">
-                            <Button
-                              variant="outline"
-                              className="flex-1"
-                              onClick={clearQueue}
-                              disabled={installing || uninstalling}
-                            >
-                              Clear Install Queue
-                            </Button>
-                            <Button
-                              className="flex-1"
-                              onClick={async () => {
-                                setSimulatingInstall(true)
-                                try {
-                                  const sim = await window.go.main.App.SimulateInstall([...installQueue], device)
-                                  if (sim.packages.length === 0) {
-                                    setQueueError('All packages are already installed')
-                                    setTimeout(() => setQueueError(null), 4000)
-                                    setInstallQueue(new Set())
-                                  } else {
-                                    setPendingInstallConfirm({ packages: sim.packages, requested: sim.requested })
-                                  }
-                                } catch (err) {
-                                  console.error('SimulateInstall failed:', err)
-                                  const pkgs = [...installQueue]
-                                  setPendingInstallConfirm({ packages: pkgs, requested: pkgs })
-                                } finally {
-                                  setSimulatingInstall(false)
-                                }
-                              }}
-                              disabled={installing || uninstalling || simulatingInstall}
-                            >
-                              {installing ? (
-                                <>
-                                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                  Installing...
-                                </>
-                              ) : simulatingInstall ? (
-                                <>
-                                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                  Checking...
-                                </>
-                              ) : (
-                                'Install Selected'
-                              )}
-                            </Button>
-                          </div>
+              {/* Queue Section - Outside ternary so it shows with both checklist and normal mods */}
+              {(installQueue.size > 0 || uninstallQueue.size > 0) && (
+                <div className="fixed bottom-0 left-0 right-0 py-4 px-6 bg-background border-t shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] z-50 space-y-4">
+                  {/* Install Queue */}
+                  {installQueue.size > 0 && (
+                    <div>
+                      <div
+                        className="flex items-center mb-2 cursor-pointer select-none"
+                        onClick={() => setInstallQueueExpanded(!installQueueExpanded)}
+                      >
+                        <span className="text-sm font-medium flex items-center gap-2">
+                          Install Queue ({installQueue.size})
+                          <ChevronDown className={`h-4 w-4 transition-transform ${installQueueExpanded ? '' : '-rotate-90'}`} />
+                        </span>
+                      </div>
+                      {installQueueExpanded && (
+                        <div className="space-y-1 mb-3">
+                          {Array.from(installQueue).map((name) => {
+                            return (
+                              <div
+                                key={name}
+                                className="flex items-center justify-between text-sm py-1"
+                              >
+                                <span>{name}</span>
+                                <button
+                                  onClick={() => removeFromQueue(name)}
+                                  className="text-muted-foreground hover:text-foreground"
+                                >
+                                  <X className="h-4 w-4" />
+                                </button>
+                              </div>
+                            )
+                          })}
                         </div>
                       )}
-
-                      {/* Uninstall Queue */}
-                      {uninstallQueue.size > 0 && (
-                        <div>
-                          <div
-                            className="flex items-center mb-2 cursor-pointer select-none"
-                            onClick={() => setUninstallQueueExpanded(!uninstallQueueExpanded)}
-                          >
-                            <span className="text-sm font-medium text-destructive flex items-center gap-2">
-                              Uninstall Queue ({uninstallQueue.size})
-                              <ChevronDown className={`h-4 w-4 transition-transform ${uninstallQueueExpanded ? '' : '-rotate-90'}`} />
-                            </span>
-                          </div>
-                          {uninstallQueueExpanded && (
-                            <div className="space-y-1 mb-3">
-                              {Array.from(uninstallQueue).map((name) => {
-                                return (
-                                  <div
-                                    key={name}
-                                    className="flex items-center justify-between text-sm py-1"
-                                  >
-                                    <span>{name}</span>
-                                    <button
-                                      onClick={() => removeFromUninstallQueue(name)}
-                                      className="text-muted-foreground hover:text-foreground"
-                                    >
-                                      <X className="h-4 w-4" />
-                                    </button>
-                                  </div>
-                                )
-                              })}
-                            </div>
+                      <div className="flex gap-2">
+                        <Button
+                          variant="outline"
+                          className="flex-1"
+                          onClick={clearQueue}
+                          disabled={installing || uninstalling}
+                        >
+                          Clear Install Queue
+                        </Button>
+                        <Button
+                          className="flex-1"
+                          onClick={async () => {
+                            setSimulatingInstall(true)
+                            try {
+                              const sim = await window.go.main.App.SimulateInstall([...installQueue], device)
+                              if (sim.packages.length === 0) {
+                                setQueueError('All packages are already installed')
+                                setTimeout(() => setQueueError(null), 4000)
+                                setInstallQueue(new Set())
+                              } else {
+                                setPendingInstallConfirm({ packages: sim.packages, requested: sim.requested })
+                              }
+                            } catch (err) {
+                              console.error('SimulateInstall failed:', err)
+                              const pkgs = [...installQueue]
+                              setPendingInstallConfirm({ packages: pkgs, requested: pkgs })
+                            } finally {
+                              setSimulatingInstall(false)
+                            }
+                          }}
+                          disabled={installing || uninstalling || simulatingInstall}
+                        >
+                          {installing ? (
+                            <>
+                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                              Installing...
+                            </>
+                          ) : simulatingInstall ? (
+                            <>
+                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                              Checking...
+                            </>
+                          ) : (
+                            'Install Selected'
                           )}
-                          <div className="flex gap-2">
-                            <Button
-                              variant="outline"
-                              className="flex-1"
-                              onClick={clearUninstallQueue}
-                              disabled={installing || uninstalling}
-                            >
-                              Clear Uninstall Queue
-                            </Button>
-                            <Button
-                              className="flex-1"
-                              onClick={async () => {
-                                setSimulatingUninstall(true)
-                                try {
-                                  const selected = [...uninstallQueue]
-                                  const sim = await window.go.main.App.SimulateUninstall(selected)
-                                  if (sim.blocked && Object.keys(sim.blocked).length > 0) {
-                                    setPendingUninstallConfirm({
-                                      selected,
-                                      packages: sim.recursivePackages || sim.packages,
-                                      blocked: sim.blocked,
-                                      useRecursive: true
-                                    })
-                                  } else {
-                                    setPendingUninstallConfirm({
-                                      selected,
-                                      packages: sim.packages.length > 0 ? sim.packages : selected,
-                                      blocked: null,
-                                      useRecursive: false
-                                    })
-                                  }
-                                } catch (err) {
-                                  console.error('SimulateUninstall failed:', err)
-                                  const selected = [...uninstallQueue]
-                                  setPendingUninstallConfirm({
-                                    selected,
-                                    packages: selected,
-                                    blocked: null,
-                                    useRecursive: false
-                                  })
-                                } finally {
-                                  setSimulatingUninstall(false)
-                                }
-                              }}
-                              disabled={installing || uninstalling || simulatingUninstall}
-                            >
-                              {uninstalling ? (
-                                <>
-                                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                  Removing...
-                                </>
-                              ) : simulatingUninstall ? (
-                                <>
-                                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                  Checking...
-                                </>
-                              ) : (
-                                'Uninstall Selected'
-                              )}
-                            </Button>
-                          </div>
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Uninstall Queue */}
+                  {uninstallQueue.size > 0 && (
+                    <div>
+                      <div
+                        className="flex items-center mb-2 cursor-pointer select-none"
+                        onClick={() => setUninstallQueueExpanded(!uninstallQueueExpanded)}
+                      >
+                        <span className="text-sm font-medium text-destructive flex items-center gap-2">
+                          Uninstall Queue ({uninstallQueue.size})
+                          <ChevronDown className={`h-4 w-4 transition-transform ${uninstallQueueExpanded ? '' : '-rotate-90'}`} />
+                        </span>
+                      </div>
+                      {uninstallQueueExpanded && (
+                        <div className="space-y-1 mb-3">
+                          {Array.from(uninstallQueue).map((name) => {
+                            return (
+                              <div
+                                key={name}
+                                className="flex items-center justify-between text-sm py-1"
+                              >
+                                <span>{name}</span>
+                                <button
+                                  onClick={() => removeFromUninstallQueue(name)}
+                                  className="text-muted-foreground hover:text-foreground"
+                                >
+                                  <X className="h-4 w-4" />
+                                </button>
+                              </div>
+                            )
+                          })}
                         </div>
                       )}
+                      <div className="flex gap-2">
+                        <Button
+                          variant="outline"
+                          className="flex-1"
+                          onClick={clearUninstallQueue}
+                          disabled={installing || uninstalling}
+                        >
+                          Clear Uninstall Queue
+                        </Button>
+                        <Button
+                          className="flex-1"
+                          onClick={async () => {
+                            setSimulatingUninstall(true)
+                            try {
+                              const selected = [...uninstallQueue]
+                              const sim = await window.go.main.App.SimulateUninstall(selected)
+                              if (sim.blocked && Object.keys(sim.blocked).length > 0) {
+                                setPendingUninstallConfirm({
+                                  selected,
+                                  packages: sim.recursivePackages || sim.packages,
+                                  blocked: sim.blocked,
+                                  useRecursive: true
+                                })
+                              } else {
+                                setPendingUninstallConfirm({
+                                  selected,
+                                  packages: sim.packages.length > 0 ? sim.packages : selected,
+                                  blocked: null,
+                                  useRecursive: false
+                                })
+                              }
+                            } catch (err) {
+                              console.error('SimulateUninstall failed:', err)
+                              const selected = [...uninstallQueue]
+                              setPendingUninstallConfirm({
+                                selected,
+                                packages: selected,
+                                blocked: null,
+                                useRecursive: false
+                              })
+                            } finally {
+                              setSimulatingUninstall(false)
+                            }
+                          }}
+                          disabled={installing || uninstalling || simulatingUninstall}
+                        >
+                          {uninstalling ? (
+                            <>
+                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                              Removing...
+                            </>
+                          ) : simulatingUninstall ? (
+                            <>
+                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                              Checking...
+                            </>
+                          ) : (
+                            'Uninstall Selected'
+                          )}
+                        </Button>
+                      </div>
                     </div>
                   )}
                 </div>
+              )}
             </TabsContent>
 
             <TabsContent value="maintenance">
@@ -1597,29 +1776,31 @@ export default function App() {
                   <CardContent>
                     <div className="space-y-4">
                       {/* Auto-Update Status */}
-                      <div className="flex items-center gap-2 p-3 bg-muted rounded-lg">
+                      <div className="flex items-center gap-2">
                         <span className="text-sm font-medium">Auto-Update Status:</span>
-                        <div className="flex gap-2">
-                          <span className={`text-xs px-2 py-1 rounded ${updateServiceStatus.enabled ? 'bg-green-500/20 text-green-700' : 'bg-gray-500/20 text-gray-700'}`}>
-                            {updateServiceStatus.enabled ? 'Enabled' : 'Disabled'}
-                          </span>
-                          <span className={`text-xs px-2 py-1 rounded ${updateServiceStatus.running ? 'bg-blue-500/20 text-blue-700' : 'bg-gray-500/20 text-gray-700'}`}>
-                            {updateServiceStatus.running ? 'Running' : 'Stopped'}
-                          </span>
-                        </div>
+                        <Badge variant={updateServiceStatus.enabled ? 'default' : 'secondary'}>
+                          {updateServiceStatus.enabled ? 'Enabled' : 'Disabled'}
+                        </Badge>
+                        <Badge variant={updateServiceStatus.running ? 'default' : 'secondary'}>
+                          {updateServiceStatus.running ? 'Running' : 'Stopped'}
+                        </Badge>
                       </div>
 
                       <div className="grid grid-cols-2 gap-4">
-                        {systemTasks.map((task) => (
-                          <Button
-                            key={task.id}
-                            onClick={() => handleSystemTask(task.id)}
-                            disabled={commandRunning}
-                            variant="outline"
-                          >
-                            {task.label}
-                          </Button>
-                        ))}
+                        {systemTasks.map((task) => {
+                          const isEnableDisabled = task.id === 'enable-updates' && updateServiceStatus.enabled && updateServiceStatus.running
+                          const isDisableDisabled = task.id === 'disable-updates' && !updateServiceStatus.enabled && !updateServiceStatus.running
+                          return (
+                            <Button
+                              key={task.id}
+                              onClick={() => handleSystemTask(task.id)}
+                              disabled={commandRunning || isEnableDisabled || isDisableDisabled}
+                              variant="outline"
+                            >
+                              {task.label}
+                            </Button>
+                          )
+                        })}
                       </div>
                     </div>
                   </CardContent>
@@ -1638,7 +1819,7 @@ export default function App() {
                       </p>
                     ) : (
                       <div className="space-y-4">
-                        {packages.filter(p => installedPackages.has(p.name) && maintenanceCommands[p.name]).map((pkg) => (
+                        {packages.filter(p => installedPackages.has(p.name) && maintenanceCommands[p.name]).sort((a, b) => a.name.localeCompare(b.name)).map((pkg) => (
                           <div key={pkg.name}>
                             <h4 className="font-medium mb-2">{pkg.name}</h4>
                             <div className="grid grid-cols-3 gap-2">

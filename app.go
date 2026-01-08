@@ -513,6 +513,16 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 		} else if err == nil && installed {
 			runtime.EventsEmit(a.ctx, "vellum:ready", nil)
 
+			osState, err := a.vellumClient.GetOSVersionState()
+			if err == nil && osState.Mismatch {
+				fmt.Printf("[DEBUG] OS mismatch detected: stored=%s, current=%s\n",
+					osState.StoredVersion, osState.CurrentVersion)
+				runtime.EventsEmit(a.ctx, "os:mismatch", map[string]string{
+					"prevVersion": osState.StoredVersion,
+					"newVersion":  osState.CurrentVersion,
+				})
+			}
+
 			status := a.CheckHashtabVersion()
 			fmt.Printf("[DEBUG] Hashtab check: installed=%v, hashtabVersion=%s, firmwareVersion=%s, needsRebuild=%v\n",
 				status.Installed, status.HashtabVersion, status.FirmwareVersion, status.NeedsRebuild)
@@ -795,17 +805,23 @@ func (a *App) GetUpdateServiceStatus() UpdateServiceStatus {
 	}
 
 	if a.client == nil {
+		fmt.Println("[DEBUG] GetUpdateServiceStatus: client is nil")
 		return status
 	}
 
-	if output, err := a.runCommand("systemctl is-enabled update-engine.service"); err == nil {
+	output, err := a.runCommand("systemctl is-enabled update-engine.service")
+	fmt.Printf("[DEBUG] GetUpdateServiceStatus: is-enabled output=%q, err=%v\n", output, err)
+	if err == nil {
 		status.Enabled = strings.TrimSpace(output) == "enabled"
 	}
 
-	if output, err := a.runCommand("systemctl is-active update-engine.service"); err == nil {
+	output, err = a.runCommand("systemctl is-active update-engine.service")
+	fmt.Printf("[DEBUG] GetUpdateServiceStatus: is-active output=%q, err=%v\n", output, err)
+	if err == nil {
 		status.Running = strings.TrimSpace(output) == "active"
 	}
 
+	fmt.Printf("[DEBUG] GetUpdateServiceStatus: returning enabled=%v, running=%v\n", status.Enabled, status.Running)
 	return status
 }
 
@@ -985,6 +1001,182 @@ func (a *App) RunReenable() {
 	} else {
 		runtime.EventsEmit(a.ctx, "terminal:output", "\nReenable completed successfully.\n")
 	}
+}
+
+type OSVersionStateResult struct {
+	CurrentVersion string `json:"currentVersion"`
+	StoredVersion  string `json:"storedVersion"`
+	Mismatch       bool   `json:"mismatch"`
+}
+
+func (a *App) GetOSVersionState() OSVersionStateResult {
+	if a.vellumClient == nil {
+		return OSVersionStateResult{}
+	}
+
+	state, err := a.vellumClient.GetOSVersionState()
+	if err != nil {
+		return OSVersionStateResult{}
+	}
+
+	return OSVersionStateResult{
+		CurrentVersion: state.CurrentVersion,
+		StoredVersion:  state.StoredVersion,
+		Mismatch:       state.Mismatch,
+	}
+}
+
+type CompatibilityResultJSON struct {
+	Compatible   []string `json:"compatible"`
+	Incompatible []string `json:"incompatible"`
+	NoConstraint []string `json:"noConstraint"`
+	FetchFailed  bool     `json:"fetchFailed"`
+}
+
+func (a *App) CheckOSCompatibility(targetOS string) CompatibilityResultJSON {
+	if a.vellumClient == nil {
+		return CompatibilityResultJSON{FetchFailed: true}
+	}
+
+	result, _ := a.vellumClient.CheckOSCompatibility(targetOS)
+	if result == nil {
+		return CompatibilityResultJSON{FetchFailed: true}
+	}
+
+	return CompatibilityResultJSON{
+		Compatible:   result.Compatible,
+		Incompatible: result.Incompatible,
+		NoConstraint: result.NoConstraint,
+		FetchFailed:  result.FetchFailed,
+	}
+}
+
+type PackageCompatibilityStatus struct {
+	InstalledPackages    []string `json:"installedPackages"`
+	CompatiblePackages   []string `json:"compatiblePackages"`
+	IncompatiblePackages []string `json:"incompatiblePackages"`
+	CurrentOsVersion     string   `json:"currentOsVersion"`
+	StoredOsVersion      string   `json:"storedOsVersion"`
+	FetchFailed          bool     `json:"fetchFailed"`
+}
+
+func (a *App) GetPackageCompatibilityStatus() PackageCompatibilityStatus {
+	fmt.Println("[DEBUG] GetPackageCompatibilityStatus: called")
+	if a.vellumClient == nil {
+		fmt.Println("[DEBUG] GetPackageCompatibilityStatus: vellumClient is nil")
+		return PackageCompatibilityStatus{FetchFailed: true}
+	}
+
+	osState, err := a.vellumClient.GetOSVersionState()
+	if err != nil {
+		fmt.Printf("[DEBUG] GetPackageCompatibilityStatus: GetOSVersionState error: %v\n", err)
+		return PackageCompatibilityStatus{FetchFailed: true}
+	}
+	fmt.Printf("[DEBUG] GetPackageCompatibilityStatus: osState=%+v\n", osState)
+
+	installed, err := a.vellumClient.List()
+	if err != nil {
+		fmt.Printf("[DEBUG] GetPackageCompatibilityStatus: List error: %v\n", err)
+		return PackageCompatibilityStatus{FetchFailed: true}
+	}
+	fmt.Printf("[DEBUG] GetPackageCompatibilityStatus: installed=%v\n", installed)
+
+	var filteredInstalled []string
+	for _, pkg := range installed {
+		if !hiddenPackages[pkg] {
+			filteredInstalled = append(filteredInstalled, pkg)
+		}
+	}
+	fmt.Printf("[DEBUG] GetPackageCompatibilityStatus: filteredInstalled=%v\n", filteredInstalled)
+
+	compat, err := a.vellumClient.CheckOSCompatibility(osState.CurrentVersion)
+	fmt.Printf("[DEBUG] GetPackageCompatibilityStatus: compat=%+v, err=%v\n", compat, err)
+
+	if err != nil && (compat == nil || compat.FetchFailed) {
+		fmt.Println("[DEBUG] GetPackageCompatibilityStatus: returning with FetchFailed due to error")
+		return PackageCompatibilityStatus{
+			InstalledPackages: filteredInstalled,
+			CurrentOsVersion:  osState.CurrentVersion,
+			StoredOsVersion:   osState.StoredVersion,
+			FetchFailed:       true,
+		}
+	}
+
+	allEmpty := len(compat.Compatible) == 0 && len(compat.Incompatible) == 0 && len(compat.NoConstraint) == 0
+	if compat.FetchFailed || allEmpty {
+		fmt.Printf("[DEBUG] GetPackageCompatibilityStatus: fallback (FetchFailed=%v, allEmpty=%v)\n", compat.FetchFailed, allEmpty)
+		return PackageCompatibilityStatus{
+			InstalledPackages:    filteredInstalled,
+			CompatiblePackages:   filteredInstalled,
+			IncompatiblePackages: []string{},
+			CurrentOsVersion:     osState.CurrentVersion,
+			StoredOsVersion:      osState.StoredVersion,
+			FetchFailed:          true,
+		}
+	}
+
+	result := PackageCompatibilityStatus{
+		InstalledPackages:    filteredInstalled,
+		CompatiblePackages:   append(compat.Compatible, compat.NoConstraint...),
+		IncompatiblePackages: compat.Incompatible,
+		CurrentOsVersion:     osState.CurrentVersion,
+		StoredOsVersion:      osState.StoredVersion,
+		FetchFailed:          false,
+	}
+	fmt.Printf("[DEBUG] GetPackageCompatibilityStatus: returning result=%+v\n", result)
+	return result
+}
+
+func (a *App) RunUpgrade() {
+	if a.vellumClient == nil {
+		return
+	}
+
+	go func() {
+		osState, err := a.vellumClient.GetOSVersionState()
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "upgrade:error", "Failed to get OS version state")
+			return
+		}
+
+		if osState.Mismatch {
+			runtime.EventsEmit(a.ctx, "terminal:output", fmt.Sprintf("Checking package compatibility with OS %s...\n", osState.CurrentVersion))
+
+			compat, err := a.vellumClient.CheckOSCompatibility(osState.CurrentVersion)
+			if err != nil && compat.FetchFailed {
+				runtime.EventsEmit(a.ctx, "upgrade:error", "Could not fetch package index to verify compatibility")
+				return
+			}
+
+			if len(compat.Incompatible) > 0 {
+				runtime.EventsEmit(a.ctx, "upgrade:blocked", CompatibilityResultJSON{
+					Compatible:   compat.Compatible,
+					Incompatible: compat.Incompatible,
+					NoConstraint: compat.NoConstraint,
+					FetchFailed:  compat.FetchFailed,
+				})
+				return
+			}
+
+			runtime.EventsEmit(a.ctx, "terminal:output", "All packages compatible. Proceeding with upgrade...\n\n")
+		}
+
+		runtime.EventsEmit(a.ctx, "terminal:clear")
+		runtime.EventsEmit(a.ctx, "terminal:output", "Running vellum upgrade...\n")
+
+		err = a.vellumClient.UpgradeStreaming(func(line string) {
+			runtime.EventsEmit(a.ctx, "terminal:output", line+"\n")
+		})
+
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "terminal:output", fmt.Sprintf("\nUpgrade error: %v\n", err))
+			runtime.EventsEmit(a.ctx, "upgrade:complete", false)
+			return
+		}
+
+		runtime.EventsEmit(a.ctx, "terminal:output", "\nUpgrade completed successfully.\n")
+		runtime.EventsEmit(a.ctx, "upgrade:complete", true)
+	}()
 }
 
 type MaintenanceCommandInfo struct {

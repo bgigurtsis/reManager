@@ -8,7 +8,7 @@
           "description": "Start xovi with the stock interface",
           "command": "/home/root/xovi/start",
           "requiresTerminal": true,
-          "allowStop": true
+          "allowStop": false
         },
         {
           "id": "stock",

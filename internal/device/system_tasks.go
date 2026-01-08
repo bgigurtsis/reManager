@@ -14,25 +14,6 @@ type SystemTask struct {
 
 var SystemTasks = []SystemTask{
 	{
-		ID:          "disable-updates",
-		Label:       "Disable Auto-Updates",
-		Description: "Prevent automatic software updates",
-		Command: func(ctx component.CommandContext) []component.CommandResult {
-			return []component.CommandResult{
-				{
-					Script:      "systemctl stop update-engine.service",
-					Description: "Stop update service",
-				},
-				{
-					Script:      "systemctl disable update-engine.service",
-					Description: "Disable update service",
-				},
-			}
-		},
-		RequiresTerminal:   true,
-		NeedsWriteableRoot: true,
-	},
-	{
 		ID:          "enable-updates",
 		Label:       "Enable Auto-Updates",
 		Description: "Re-enable automatic software updates",
@@ -50,6 +31,25 @@ var SystemTasks = []SystemTask{
 		},
 		RequiresTerminal:   true,
 		NeedsWriteableRoot: false,
+	},
+	{
+		ID:          "disable-updates",
+		Label:       "Disable Auto-Updates",
+		Description: "Prevent automatic software updates",
+		Command: func(ctx component.CommandContext) []component.CommandResult {
+			return []component.CommandResult{
+				{
+					Script:      "systemctl stop update-engine.service",
+					Description: "Stop update service",
+				},
+				{
+					Script:      "systemctl disable update-engine.service",
+					Description: "Disable update service",
+				},
+			}
+		},
+		RequiresTerminal:   true,
+		NeedsWriteableRoot: true,
 	},
 }
 

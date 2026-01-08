@@ -90,6 +90,19 @@ type ListResult struct {
 	NewVersion  string
 }
 
+type OSVersionState struct {
+	CurrentVersion string
+	StoredVersion  string
+	Mismatch       bool
+}
+
+type CompatibilityResult struct {
+	Compatible   []string
+	Incompatible []string
+	NoConstraint []string
+	FetchFailed  bool
+}
+
 var osUpgradeRegex = regexp.MustCompile(`OS updated \(([^\s]+) → ([^\s]+)\)`)
 
 func (c *Client) ListWithOsCheck() (*ListResult, error) {
@@ -119,6 +132,86 @@ func (c *Client) ListWithOsCheck() (*ListResult, error) {
 
 func (c *Client) ReenableStreaming(onOutput func(line string)) error {
 	cmd := fmt.Sprintf("%s reenable", VellumBin)
+	return c.executor.ExecuteStreaming(cmd, onOutput)
+}
+
+func (c *Client) GetOSVersionState() (*OSVersionState, error) {
+	var currentVersion string
+
+	output, err := c.executor.ExecuteWithOutput("grep '^RELEASE_VERSION=' /usr/share/remarkable/update.conf 2>/dev/null")
+	if err == nil {
+		if parts := strings.SplitN(output, "=", 2); len(parts) == 2 {
+			currentVersion = strings.Trim(strings.TrimSpace(parts[1]), "\"'")
+		}
+	}
+
+	if currentVersion == "" {
+		output, err = c.executor.ExecuteWithOutput("grep '^IMG_VERSION=' /etc/os-release 2>/dev/null")
+		if err == nil {
+			if parts := strings.SplitN(output, "=", 2); len(parts) == 2 {
+				currentVersion = strings.Trim(strings.TrimSpace(parts[1]), "\"'")
+			}
+		}
+	}
+
+	storedOutput, _ := c.executor.ExecuteWithOutput(fmt.Sprintf("cat %s/state/osver 2>/dev/null", VellumRoot))
+	storedVersion := strings.TrimSpace(storedOutput)
+
+	return &OSVersionState{
+		CurrentVersion: currentVersion,
+		StoredVersion:  storedVersion,
+		Mismatch:       currentVersion != "" && storedVersion != "" && currentVersion != storedVersion,
+	}, nil
+}
+
+func (c *Client) CheckOSCompatibility(targetOS string) (*CompatibilityResult, error) {
+	cmd := fmt.Sprintf("%s check-os %s", VellumBin, targetOS)
+	fmt.Printf("[DEBUG] CheckOSCompatibility: running '%s'\n", cmd)
+	output, err := c.executor.ExecuteWithOutput(cmd)
+	fmt.Printf("[DEBUG] CheckOSCompatibility: output=%q, err=%v\n", output, err)
+
+	result := &CompatibilityResult{
+		Compatible:   []string{},
+		Incompatible: []string{},
+		NoConstraint: []string{},
+	}
+
+	if err != nil && output == "" {
+		result.FetchFailed = true
+		fmt.Printf("[DEBUG] CheckOSCompatibility: early return with FetchFailed=true\n")
+		return result, err
+	}
+
+	for _, line := range strings.Split(output, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "✓") || strings.HasPrefix(trimmed, "[OK]") {
+			pkg := strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(trimmed, "✓"), "[OK]"))
+			if pkg != "" {
+				result.Compatible = append(result.Compatible, pkg)
+			}
+		} else if strings.HasPrefix(trimmed, "✗") || strings.HasPrefix(trimmed, "[FAIL]") {
+			pkg := strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(trimmed, "✗"), "[FAIL]"))
+			if pkg != "" {
+				result.Incompatible = append(result.Incompatible, pkg)
+			}
+		} else if strings.HasPrefix(trimmed, "-") {
+			pkg := strings.TrimSpace(strings.TrimPrefix(trimmed, "-"))
+			if pkg != "" && !strings.Contains(pkg, "Packages without") {
+				result.NoConstraint = append(result.NoConstraint, pkg)
+			}
+		}
+	}
+
+	if strings.Contains(output, "Could not fetch") || strings.Contains(output, "fetch failed") {
+		result.FetchFailed = true
+	}
+
+	fmt.Printf("[DEBUG] CheckOSCompatibility: result=%+v\n", result)
+	return result, nil
+}
+
+func (c *Client) UpgradeStreaming(onOutput func(line string)) error {
+	cmd := fmt.Sprintf("%s upgrade", VellumBin)
 	return c.executor.ExecuteStreaming(cmd, onOutput)
 }
 

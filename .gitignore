@@ -2,6 +2,7 @@
 build/bin/
 frontend/dist/
 frontend/.vite/
+.cache-go/
 
 # Dependencies
 frontend/node_modules/
