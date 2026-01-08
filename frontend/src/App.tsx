@@ -8,6 +8,7 @@ import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { Sheet, SheetContent } from '@/components/ui/sheet'
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
 import { ProgressModal } from '@/components/ProgressModal'
 import { PackageDetailPanel } from '@/components/PackageDetailPanel'
 import { NotificationBanner } from '@/components/NotificationBanner'
@@ -16,7 +17,7 @@ import { VellumInstallPrompt } from '@/components/VellumInstallPrompt'
 import { SettingsDialog } from '@/components/SettingsDialog'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { Badge } from '@/components/ui/badge'
-import { Loader2, Unplug, Check, AlertTriangle, Trash2, Plus, X, Search, ChevronDown, Settings } from 'lucide-react'
+import { Loader2, Unplug, Check, AlertTriangle, Trash2, Plus, X, Search, Settings } from 'lucide-react'
 
 interface PackageInfo {
   name: string
@@ -262,11 +263,7 @@ export default function App() {
   const [queueError, setQueueError] = useState<string | null>(null)
   const [lastInstallSuccess, setLastInstallSuccess] = useState<boolean | null>(null)
   const [lastOperationType, setLastOperationType] = useState<'install' | 'uninstall' | null>(null)
-  const [installedExpanded, setInstalledExpanded] = useState(true)
-  const [availableExpanded, setAvailableExpanded] = useState(true)
   const [selectedPackage, setSelectedPackage] = useState<PackageInfo | null>(null)
-  const [installQueueExpanded, setInstallQueueExpanded] = useState(false)
-  const [uninstallQueueExpanded, setUninstallQueueExpanded] = useState(false)
   const [pendingInstallConfirm, setPendingInstallConfirm] = useState<{
     packages: string[]
     requested: string[]
@@ -1534,147 +1531,139 @@ export default function App() {
                   {/* Installed Section */}
                   {installedFiltered.length > 0 && (
                     <Card>
-                      <CardHeader
-                        className={`cursor-pointer select-none ${installedExpanded ? 'pb-3' : 'py-4'}`}
-                        onClick={() => setInstalledExpanded(!installedExpanded)}
-                      >
-                        <CardTitle className="text-sm font-semibold uppercase tracking-wide flex items-center justify-between">
-                          <span>Installed ({installedFiltered.length})</span>
-                          <ChevronDown className={`h-4 w-4 transition-transform ${installedExpanded ? '' : '-rotate-90'}`} />
-                        </CardTitle>
-                      </CardHeader>
-                      {installedExpanded && (
-                        <CardContent className="pt-0">
-                          <div className="divide-y">
-                            {installedFiltered.map((pkg, index) => {
-                              const isQueued = uninstallQueue.has(pkg.name)
-                              const prevQueued = index > 0 && uninstallQueue.has(installedFiltered[index - 1].name)
-                              const nextQueued = index < installedFiltered.length - 1 && uninstallQueue.has(installedFiltered[index + 1].name)
-                              return (
-                                <div key={pkg.name} className={`py-3 px-6 -mx-6 flex items-center gap-4 transition-colors ${isQueued ? `border-l-4 border-destructive ${!prevQueued ? 'border-t' : ''} ${!nextQueued ? 'border-b' : ''}` : index % 2 === 1 ? 'bg-muted/50 hover:bg-muted' : 'hover:bg-muted/70'}`}>
-                                <div
-                                  className="flex-1 min-w-0 cursor-pointer"
-                                  onClick={() => setSelectedPackage(pkg)}
-                                >
-                                  <div className="flex items-center gap-2">
-                                    <span className="font-medium">{pkg.name}</span>
-                                    {pkg.category && <Badge variant="outline">{pkg.category}</Badge>}
+                      <Accordion type="single" collapsible defaultValue="installed">
+                        <AccordionItem value="installed" className="border-none">
+                          <AccordionTrigger className="px-6 py-4 text-sm font-semibold uppercase tracking-wide hover:no-underline">
+                            Installed ({installedFiltered.length})
+                          </AccordionTrigger>
+                          <AccordionContent>
+                            <div className="divide-y px-6 pb-4">
+                              {installedFiltered.map((pkg, index) => {
+                                const isQueued = uninstallQueue.has(pkg.name)
+                                const prevQueued = index > 0 && uninstallQueue.has(installedFiltered[index - 1].name)
+                                const nextQueued = index < installedFiltered.length - 1 && uninstallQueue.has(installedFiltered[index + 1].name)
+                                return (
+                                  <div key={pkg.name} className={`py-3 flex items-center gap-4 transition-colors ${isQueued ? `border-l-4 border-destructive ${!prevQueued ? 'border-t' : ''} ${!nextQueued ? 'border-b' : ''}` : index % 2 === 1 ? 'bg-muted/50 hover:bg-muted' : 'hover:bg-muted/70'}`}>
+                                  <div
+                                    className="flex-1 min-w-0 cursor-pointer"
+                                    onClick={() => setSelectedPackage(pkg)}
+                                  >
+                                    <div className="flex items-center gap-2">
+                                      <span className="font-medium">{pkg.name}</span>
+                                      {pkg.category && <Badge variant="outline">{pkg.category}</Badge>}
+                                    </div>
+                                    <p className="text-sm text-muted-foreground mt-1">{pkg.description}</p>
+                                    {pkg.upstreamAuthor && (
+                                      <span className="text-sm text-muted-foreground">
+                                        by {pkg.upstreamAuthor}
+                                      </span>
+                                    )}
                                   </div>
-                                  <p className="text-sm text-muted-foreground mt-1">{pkg.description}</p>
-                                  {pkg.upstreamAuthor && (
-                                    <span className="text-sm text-muted-foreground">
-                                      by {pkg.upstreamAuthor}
-                                    </span>
+                                  {isQueued ? (
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => removeFromUninstallQueue(pkg.name)}
+                                    >
+                                      <Check className="h-4 w-4 mr-1" />
+                                      Queued
+                                    </Button>
+                                  ) : (
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => addToUninstallQueue(pkg.name)}
+                                      disabled={installing || uninstalling}
+                                    >
+                                      <Trash2 className="h-4 w-4 mr-1" />
+                                      Remove
+                                    </Button>
                                   )}
-                                </div>
-                                {isQueued ? (
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    onClick={() => removeFromUninstallQueue(pkg.name)}
-                                  >
-                                    <Check className="h-4 w-4 mr-1" />
-                                    Queued
-                                  </Button>
-                                ) : (
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    onClick={() => addToUninstallQueue(pkg.name)}
-                                    disabled={installing || uninstalling}
-                                  >
-                                    <Trash2 className="h-4 w-4 mr-1" />
-                                    Remove
-                                  </Button>
-                                )}
-                                </div>
-                              )
-                            })}
-                          </div>
-                        </CardContent>
-                      )}
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          </AccordionContent>
+                        </AccordionItem>
+                      </Accordion>
                     </Card>
                   )}
 
                   {/* Available Section */}
                   {availableFiltered.length > 0 && (
                     <Card>
-                      <CardHeader
-                        className={`cursor-pointer select-none ${availableExpanded ? 'pb-3' : 'py-4'}`}
-                        onClick={() => setAvailableExpanded(!availableExpanded)}
-                      >
-                        <CardTitle className="text-sm font-semibold uppercase tracking-wide flex items-center justify-between">
-                          <span>Available ({availableFiltered.length})</span>
-                          <ChevronDown className={`h-4 w-4 transition-transform ${availableExpanded ? '' : '-rotate-90'}`} />
-                        </CardTitle>
-                      </CardHeader>
-                      {availableExpanded && (
-                        <CardContent className="pt-0">
-                          <div className="divide-y">
-                            {availableFiltered.map((pkg, index) => {
-                              const isQueued = installQueue.has(pkg.name)
-                              const prevQueued = index > 0 && installQueue.has(availableFiltered[index - 1].name)
-                              const nextQueued = index < availableFiltered.length - 1 && installQueue.has(availableFiltered[index + 1].name)
-                              const conflict = getConflict(pkg)
-                              return (
-                                <div key={pkg.name} className={`py-3 px-6 -mx-6 flex items-center gap-4 transition-colors ${isQueued ? `border-l-4 border-primary ${!prevQueued ? 'border-t' : ''} ${!nextQueued ? 'border-b' : ''}` : index % 2 === 1 ? 'bg-muted/50 hover:bg-muted' : 'hover:bg-muted/70'}`}>
-                                <div
-                                  className="flex-1 min-w-0 cursor-pointer"
-                                  onClick={() => setSelectedPackage(pkg)}
-                                >
-                                  <div className="flex items-center gap-2">
-                                    <span className="font-medium">{pkg.name}</span>
-                                    {pkg.category && <Badge variant="outline">{pkg.category}</Badge>}
+                      <Accordion type="single" collapsible defaultValue="available">
+                        <AccordionItem value="available" className="border-none">
+                          <AccordionTrigger className="px-6 py-4 text-sm font-semibold uppercase tracking-wide hover:no-underline">
+                            Available ({availableFiltered.length})
+                          </AccordionTrigger>
+                          <AccordionContent>
+                            <div className="divide-y px-6 pb-4">
+                              {availableFiltered.map((pkg, index) => {
+                                const isQueued = installQueue.has(pkg.name)
+                                const prevQueued = index > 0 && installQueue.has(availableFiltered[index - 1].name)
+                                const nextQueued = index < availableFiltered.length - 1 && installQueue.has(availableFiltered[index + 1].name)
+                                const conflict = getConflict(pkg)
+                                return (
+                                  <div key={pkg.name} className={`py-3 flex items-center gap-4 transition-colors ${isQueued ? `border-l-4 border-primary ${!prevQueued ? 'border-t' : ''} ${!nextQueued ? 'border-b' : ''}` : index % 2 === 1 ? 'bg-muted/50 hover:bg-muted' : 'hover:bg-muted/70'}`}>
+                                  <div
+                                    className="flex-1 min-w-0 cursor-pointer"
+                                    onClick={() => setSelectedPackage(pkg)}
+                                  >
+                                    <div className="flex items-center gap-2">
+                                      <span className="font-medium">{pkg.name}</span>
+                                      {pkg.category && <Badge variant="outline">{pkg.category}</Badge>}
+                                    </div>
+                                    <p className="text-sm text-muted-foreground mt-1">{pkg.description}</p>
+                                    {pkg.upstreamAuthor && (
+                                      <span className="text-sm text-muted-foreground">
+                                        by {pkg.upstreamAuthor}
+                                      </span>
+                                    )}
                                   </div>
-                                  <p className="text-sm text-muted-foreground mt-1">{pkg.description}</p>
-                                  {pkg.upstreamAuthor && (
-                                    <span className="text-sm text-muted-foreground">
-                                      by {pkg.upstreamAuthor}
-                                    </span>
+                                  {isQueued ? (
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => removeFromQueue(pkg.name)}
+                                    >
+                                      <Check className="h-4 w-4 mr-1" />
+                                      Queued
+                                    </Button>
+                                  ) : conflict ? (
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
+                                        <span>
+                                          <Button
+                                            variant="outline"
+                                            size="sm"
+                                            disabled
+                                          >
+                                            <Plus className="h-4 w-4 mr-1" />
+                                            Add
+                                          </Button>
+                                        </span>
+                                      </TooltipTrigger>
+                                      <TooltipContent>{conflict}</TooltipContent>
+                                    </Tooltip>
+                                  ) : (
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => addToQueue(pkg.name)}
+                                      disabled={installing || uninstalling}
+                                    >
+                                      <Plus className="h-4 w-4 mr-1" />
+                                      Add
+                                    </Button>
                                   )}
                                 </div>
-                                {isQueued ? (
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    onClick={() => removeFromQueue(pkg.name)}
-                                  >
-                                    <Check className="h-4 w-4 mr-1" />
-                                    Queued
-                                  </Button>
-                                ) : conflict ? (
-                                  <Tooltip>
-                                    <TooltipTrigger asChild>
-                                      <span>
-                                        <Button
-                                          variant="outline"
-                                          size="sm"
-                                          disabled
-                                        >
-                                          <Plus className="h-4 w-4 mr-1" />
-                                          Add
-                                        </Button>
-                                      </span>
-                                    </TooltipTrigger>
-                                    <TooltipContent>{conflict}</TooltipContent>
-                                  </Tooltip>
-                                ) : (
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    onClick={() => addToQueue(pkg.name)}
-                                    disabled={installing || uninstalling}
-                                  >
-                                    <Plus className="h-4 w-4 mr-1" />
-                                    Add
-                                  </Button>
-                                )}
-                              </div>
-                            )
-                          })}
-                        </div>
-                      </CardContent>
-                      )}
+                              )
+                            })}
+                          </div>
+                        </AccordionContent>
+                        </AccordionItem>
+                      </Accordion>
                     </Card>
                   )}
 
@@ -1699,35 +1688,33 @@ export default function App() {
                   {/* Install Queue */}
                   {installQueue.size > 0 && (
                     <div>
-                      <div
-                        className="flex items-center mb-2 cursor-pointer select-none"
-                        onClick={() => setInstallQueueExpanded(!installQueueExpanded)}
-                      >
-                        <span className="text-sm font-medium flex items-center gap-2">
-                          Install Queue ({installQueue.size})
-                          <ChevronDown className={`h-4 w-4 transition-transform ${installQueueExpanded ? '' : '-rotate-90'}`} />
-                        </span>
-                      </div>
-                      {installQueueExpanded && (
-                        <div className="space-y-1 mb-3">
-                          {Array.from(installQueue).map((name) => {
-                            return (
-                              <div
-                                key={name}
-                                className="flex items-center justify-between text-sm py-1"
-                              >
-                                <span>{name}</span>
-                                <button
-                                  onClick={() => removeFromQueue(name)}
-                                  className="text-muted-foreground hover:text-foreground"
-                                >
-                                  <X className="h-4 w-4" />
-                                </button>
-                              </div>
-                            )
-                          })}
-                        </div>
-                      )}
+                      <Accordion type="single" collapsible>
+                        <AccordionItem value="install-queue" className="border-none">
+                          <AccordionTrigger className="py-2 text-sm font-medium hover:no-underline">
+                            Install Queue ({installQueue.size})
+                          </AccordionTrigger>
+                          <AccordionContent>
+                            <div className="space-y-1 mb-3">
+                              {Array.from(installQueue).map((name) => {
+                                return (
+                                  <div
+                                    key={name}
+                                    className="flex items-center justify-between text-sm py-1"
+                                  >
+                                    <span>{name}</span>
+                                    <button
+                                      onClick={() => removeFromQueue(name)}
+                                      className="text-muted-foreground hover:text-foreground"
+                                    >
+                                      <X className="h-4 w-4" />
+                                    </button>
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          </AccordionContent>
+                        </AccordionItem>
+                      </Accordion>
                       <div className="flex gap-2">
                         <Button
                           variant="outline"
@@ -1781,35 +1768,33 @@ export default function App() {
                   {/* Uninstall Queue */}
                   {uninstallQueue.size > 0 && (
                     <div>
-                      <div
-                        className="flex items-center mb-2 cursor-pointer select-none"
-                        onClick={() => setUninstallQueueExpanded(!uninstallQueueExpanded)}
-                      >
-                        <span className="text-sm font-medium text-destructive flex items-center gap-2">
-                          Uninstall Queue ({uninstallQueue.size})
-                          <ChevronDown className={`h-4 w-4 transition-transform ${uninstallQueueExpanded ? '' : '-rotate-90'}`} />
-                        </span>
-                      </div>
-                      {uninstallQueueExpanded && (
-                        <div className="space-y-1 mb-3">
-                          {Array.from(uninstallQueue).map((name) => {
-                            return (
-                              <div
-                                key={name}
-                                className="flex items-center justify-between text-sm py-1"
-                              >
-                                <span>{name}</span>
-                                <button
-                                  onClick={() => removeFromUninstallQueue(name)}
-                                  className="text-muted-foreground hover:text-foreground"
-                                >
-                                  <X className="h-4 w-4" />
-                                </button>
-                              </div>
-                            )
-                          })}
-                        </div>
-                      )}
+                      <Accordion type="single" collapsible>
+                        <AccordionItem value="uninstall-queue" className="border-none">
+                          <AccordionTrigger className="py-2 text-sm font-medium text-destructive hover:no-underline">
+                            Uninstall Queue ({uninstallQueue.size})
+                          </AccordionTrigger>
+                          <AccordionContent>
+                            <div className="space-y-1 mb-3">
+                              {Array.from(uninstallQueue).map((name) => {
+                                return (
+                                  <div
+                                    key={name}
+                                    className="flex items-center justify-between text-sm py-1"
+                                  >
+                                    <span>{name}</span>
+                                    <button
+                                      onClick={() => removeFromUninstallQueue(name)}
+                                      className="text-muted-foreground hover:text-foreground"
+                                    >
+                                      <X className="h-4 w-4" />
+                                    </button>
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          </AccordionContent>
+                        </AccordionItem>
+                      </Accordion>
                       <div className="flex gap-2">
                         <Button
                           variant="outline"
