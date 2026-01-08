@@ -30,7 +30,7 @@ var SystemTasks = []SystemTask{
 			}
 		},
 		RequiresTerminal:   true,
-		NeedsWriteableRoot: false,
+		NeedsWriteableRoot: true,
 	},
 	{
 		ID:          "disable-updates",

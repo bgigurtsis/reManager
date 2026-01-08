@@ -70,7 +70,7 @@ func (c *Client) DelStreaming(onOutput func(line string), packages ...string) er
 }
 
 func (c *Client) Update() error {
-	cmd := fmt.Sprintf("%s update", VellumBin)
+	cmd := fmt.Sprintf("%s update -y", VellumBin)
 	_, err := c.executor.ExecuteWithOutput(cmd)
 	return err
 }
@@ -311,10 +311,10 @@ func (c *Client) DelRecursiveStreaming(onOutput func(line string), packages ...s
 }
 
 // parseSimulationOutput extracts package names from vellum simulation output
-// Example lines: "(1/3) Purging hide-dev-mode-icon (1.0.0-r0)"
+// Example lines: "( 1/20) Purging hide-dev-mode-icon (1.0.0-r0)"
 //
-//	"(2/3) Installing qt-resource-rebuilder (16.0.0-r0)"
-var simulationLineRegex = regexp.MustCompile(`\(\d+/\d+\)\s+(?:Installing|Purging)\s+([^\s]+)\s+\(`)
+//	"(10/20) Installing qt-resource-rebuilder (16.0.0-r0)"
+var simulationLineRegex = regexp.MustCompile(`\(\s*\d+/\d+\)\s+(?:Installing|Purging)\s+([^\s]+)\s+\(`)
 
 func parseSimulationOutput(output string) []string {
 	var packages []string

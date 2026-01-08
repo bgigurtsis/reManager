@@ -138,6 +138,7 @@ declare global {
           CheckVellumInstalled(): Promise<boolean>
           BootstrapVellum(): Promise<void>
           CheckPackageInstalled(pkgName: string): Promise<boolean>
+          CheckHashtabVersion(): Promise<HashtabVersionStatus>
           GetPackages(): Promise<PackageInfo[]>
           GetInstalledPackages(): Promise<string[]>
           GetInstalledPackagesWithOsCheck(): Promise<InstalledPackagesResult>
@@ -2022,7 +2023,7 @@ export default function App() {
                     The following {pendingInstallConfirm.packages.length} package{pendingInstallConfirm.packages.length !== 1 ? 's' : ''} will be installed:
                   </DialogDescription>
                 </DialogHeader>
-                <div className="max-h-[40vh] overflow-y-auto">
+                <div className="max-h-[40vh] overflow-y-auto overscroll-y-contain">
                   <ul className="space-y-1 text-sm">
                     {[...pendingInstallConfirm.packages].sort().map((name) => (
                       <li key={name}>
@@ -2081,7 +2082,7 @@ export default function App() {
                     The following {pendingUninstallConfirm.packages.length} package{pendingUninstallConfirm.packages.length !== 1 ? 's' : ''} will be removed:
                   </DialogDescription>
                 </DialogHeader>
-                <div className="max-h-[40vh] overflow-y-auto space-y-4">
+                <div className="max-h-[40vh] overflow-y-auto overscroll-y-contain space-y-4">
                   <div>
                     <p className="font-medium text-sm mb-2">Selected for removal:</p>
                     <ul className="space-y-1 text-sm">

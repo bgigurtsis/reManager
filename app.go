@@ -15,6 +15,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 	"golang.org/x/crypto/ssh"
 
+	"reManager/internal/commands"
 	"reManager/internal/component"
 	"reManager/internal/device"
 	"reManager/internal/executor"
@@ -1625,9 +1626,32 @@ func (a *App) RunSystemTask(taskID, deviceType string) {
 
 		cmdResults := task.Command(ctx)
 
+		if task.NeedsWriteableRoot {
+			cmdResults = commands.WrapWithWriteableRoot(cmdResults, component.DeviceType(deviceType))
+		}
+
 		for _, c := range cmdResults {
 			runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("$ %s\n", c.Script))
+
+			done := make(chan bool, 1)
+			unsub := runtime.EventsOn(a.ctx, "command:done", func(optionalData ...interface{}) {
+				if len(optionalData) > 0 {
+					if success, ok := optionalData[0].(bool); ok {
+						done <- success
+						return
+					}
+				}
+				done <- false
+			})
+
 			a.RunCommandWithOutput(c.Script, c.RequiresPTY)
+			success := <-done
+			unsub()
+
+			if !success {
+				runtime.EventsEmit(a.ctx, "command:output", "Command failed, stopping execution\n")
+				return
+			}
 		}
 	}()
 }

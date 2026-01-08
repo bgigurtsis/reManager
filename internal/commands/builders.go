@@ -142,11 +142,27 @@ func MakeWriteable() []component.CommandResult {
 
 func WrapWithWriteableRoot(commands []component.CommandResult, device component.DeviceType) []component.CommandResult {
 	if device == component.DeviceRMPP || device == component.DeviceRMPPM {
-		ensureWriteable := component.CommandResult{
-			Script:      `if ! awk '$2 == "/" {print $4}' /proc/mounts | grep -q "\brw\b"; then mount -o remount,rw / && umount -R /etc; fi`,
-			Description: "Ensure root filesystem is writeable",
+		before := []component.CommandResult{
+			{
+				Script:      `echo "[DEBUG] Current root mount state:" && grep ' / ' /proc/mounts && echo "[DEBUG] Checking if root is rw..." && if grep -q ' / .*\brw\b' /proc/mounts; then echo "[DEBUG] Root is already rw"; else echo "[DEBUG] Remounting root as rw..." && mount -o remount,rw / && echo "[DEBUG] Root remounted as rw"; fi`,
+				Description: "Ensure root filesystem is writeable",
+			},
+			{
+				Script:      `echo "[DEBUG] Current /etc mount state:" && grep '/etc' /proc/mounts || echo "[DEBUG] No /etc in mounts" && echo "[DEBUG] Checking for overlay on /etc..." && if grep -q '^overlay.*/etc' /proc/mounts; then echo "[DEBUG] Overlay found, unmounting..." && umount -R /etc && echo "[DEBUG] /etc overlay unmounted"; else echo "[DEBUG] No overlay on /etc"; fi`,
+				Description: "Unmount /etc overlay if mounted",
+			},
 		}
-		return append([]component.CommandResult{ensureWriteable}, commands...)
+		after := []component.CommandResult{
+			{
+				Script:      `echo "[DEBUG] Checking if overlay restore needed..." && if [ -d /var/volatile/.etc-work ]; then echo "[DEBUG] Workdir exists, restoring overlay..." && rm -rf /var/volatile/.etc-work/* && mount -t overlay overlay -o rw,relatime,lowerdir=/etc,upperdir=/var/volatile/etc,workdir=/var/volatile/.etc-work /etc && echo "[DEBUG] Overlay restored"; else echo "[DEBUG] No workdir, skipping overlay restore"; fi`,
+				Description: "Restore /etc overlay",
+			},
+			{
+				Script:      `echo "[DEBUG] Syncing and remounting root as ro..." && sync && mount -o remount,ro / && echo "[DEBUG] Root remounted as ro" && echo "[DEBUG] Final mount state:" && grep ' / ' /proc/mounts`,
+				Description: "Remount root as read-only",
+			},
+		}
+		return append(append(before, commands...), after...)
 	}
 	return commands
 }
