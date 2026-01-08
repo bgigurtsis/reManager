@@ -530,6 +530,12 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 			if status.NeedsRebuild {
 				runtime.EventsEmit(a.ctx, "hashtab:version-mismatch", status)
 			}
+
+			updateStatus := a.GetUpdateServiceStatus()
+			fmt.Printf("[DEBUG] Auto-update check: enabled=%v, running=%v\n", updateStatus.Enabled, updateStatus.Running)
+			if updateStatus.Enabled || updateStatus.Running {
+				runtime.EventsEmit(a.ctx, "autoupdate:enabled", updateStatus)
+			}
 		}
 	}()
 

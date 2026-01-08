@@ -222,6 +222,7 @@ export default function App() {
     enabled: false,
     running: false,
   })
+  const [showAutoUpdateBanner, setShowAutoUpdateBanner] = useState(false)
   const [commandContext, setCommandContext] = useState<'install' | 'maintenance' | null>(null)
   const commandContextRef = useRef<'install' | 'maintenance' | null>(null)
 
@@ -689,6 +690,11 @@ export default function App() {
       }
     })
 
+    const unsubscribeAutoUpdate = window.runtime.EventsOn('autoupdate:enabled', () => {
+      console.log('Received autoupdate:enabled')
+      setShowAutoUpdateBanner(true)
+    })
+
     return () => {
       unsubscribeOutput()
       unsubscribeDone()
@@ -706,6 +712,7 @@ export default function App() {
       unsubscribeUpgradeBlocked()
       unsubscribeUpgradeError()
       unsubscribeUpgradeComplete()
+      unsubscribeAutoUpdate()
     }
   }, [])
 
@@ -1366,6 +1373,20 @@ export default function App() {
               actionLabel="Rebuild Hashtable"
               onAction={handleHashtabRebuild}
               onDismiss={() => setHashtabMismatch(null)}
+            />
+          </div>
+        )}
+
+        {step !== 'connect' && showAutoUpdateBanner && (
+          <div className="mb-4">
+            <NotificationBanner
+              message="Auto-updates are enabled. This may interfere with your mods after a system update."
+              actionLabel="Go to Maintenance"
+              onAction={() => {
+                setActiveTab('maintenance')
+                setShowAutoUpdateBanner(false)
+              }}
+              onDismiss={() => setShowAutoUpdateBanner(false)}
             />
           </div>
         )}
