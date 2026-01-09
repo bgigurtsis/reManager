@@ -24,7 +24,7 @@ interface PackageInfo {
   version: string
   description: string
   upstreamAuthor: string
-  category: string
+  categories: string[]
   url: string
   license: string
   devices: string[]
@@ -306,7 +306,7 @@ export default function App() {
 
   // Memoized sorted and filtered packages
   const categories = useMemo(() => {
-    const cats = new Set(packages.map(p => p.category).filter(Boolean))
+    const cats = new Set(packages.flatMap(p => p.categories || []))
     return Array.from(cats).sort()
   }, [packages])
 
@@ -342,7 +342,7 @@ export default function App() {
             !pkg.description.toLowerCase().includes(search.toLowerCase())) {
           return false
         }
-        if (categoryFilter !== 'all' && pkg.category !== categoryFilter) {
+        if (categoryFilter !== 'all' && !(pkg.categories || []).includes(categoryFilter)) {
           return false
         }
         return true
@@ -565,10 +565,18 @@ export default function App() {
           setOutput((prev) => prev + '\n[Command failed]\n')
         }
       }
-      // Refresh update service status after maintenance commands
+      // Refresh status after maintenance commands
       if (commandContextRef.current === 'maintenance') {
-        const status = await window.go.main.App.GetUpdateServiceStatus()
-        setUpdateServiceStatus(status)
+        const [updateStatus, hashtabStatus] = await Promise.all([
+          window.go.main.App.GetUpdateServiceStatus(),
+          window.go.main.App.CheckHashtabVersion(),
+        ])
+        setUpdateServiceStatus(updateStatus)
+        if (hashtabStatus.needsRebuild) {
+          setHashtabMismatch(hashtabStatus)
+        } else {
+          setHashtabMismatch(null)
+        }
       }
     })
 
@@ -742,7 +750,7 @@ export default function App() {
 
     const unsubscribeAutoUpdate = window.runtime.EventsOn('autoupdate:enabled', () => {
       console.log('Received autoupdate:enabled')
-      setShowAutoUpdateBanner(true)
+      setTimeout(() => setShowAutoUpdateBanner(true), 1000)
     })
 
     return () => {
@@ -1085,8 +1093,6 @@ export default function App() {
     setCommandContext('maintenance')
 
     await window.go.main.App.RunMaintenanceCommand('qt-resource-rebuilder', 'rebuild_hashtable', device)
-
-    setHashtabMismatch(null)
   }
 
   const handleChecklistUpgrade = async () => {
@@ -1099,22 +1105,6 @@ export default function App() {
     setCommandContext('maintenance')
 
     await window.go.main.App.RunUpgrade()
-
-    setChecklistLoading(false)
-    setCommandRunning(false)
-    setCommandContext(null)
-  }
-
-  const handleChecklistReenable = async () => {
-    setChecklistLoading(true)
-    setShowProgressModal(true)
-    setProgressModalType('maintenance')
-    setProgressPercentage(0)
-    setCommandRunning(true)
-    setMaintenanceOutput('')
-    setCommandContext('maintenance')
-
-    await window.go.main.App.RunReenable()
 
     setChecklistLoading(false)
     setCommandRunning(false)
@@ -1456,7 +1446,7 @@ export default function App() {
           </div>
         )}
 
-        {step !== 'connect' && showAutoUpdateBanner && (
+        {step !== 'connect' && showAutoUpdateBanner && !osMismatchDetected && (
           <div className="mb-4">
             <NotificationBanner
               message="Auto-updates are enabled. This may interfere with your mods after a system update."
@@ -1499,7 +1489,9 @@ export default function App() {
                     onAddToUninstallQueue={addToUninstallQueue}
                     onRemoveFromUninstallQueue={removeFromUninstallQueue}
                     onRunUpgrade={handleChecklistUpgrade}
-                    onRunReenable={handleChecklistReenable}
+                    autoUpdatesEnabled={updateServiceStatus.enabled}
+                    hashtabMismatch={!!hashtabMismatch}
+                    onGoToMaintenance={() => setActiveTab('maintenance')}
                   />
                 </div>
               ) : (
@@ -1550,7 +1542,7 @@ export default function App() {
                                   >
                                     <div className="flex items-center gap-2">
                                       <span className="font-medium">{pkg.name}</span>
-                                      {pkg.category && <Badge variant="outline">{pkg.category}</Badge>}
+                                      {(pkg.categories || []).map(cat => <Badge key={cat} variant="outline">{cat}</Badge>)}
                                     </div>
                                     <p className="text-sm text-muted-foreground mt-1">{pkg.description}</p>
                                     {pkg.upstreamAuthor && (
@@ -1612,7 +1604,7 @@ export default function App() {
                                   >
                                     <div className="flex items-center gap-2">
                                       <span className="font-medium">{pkg.name}</span>
-                                      {pkg.category && <Badge variant="outline">{pkg.category}</Badge>}
+                                      {(pkg.categories || []).map(cat => <Badge key={cat} variant="outline">{cat}</Badge>)}
                                     </div>
                                     <p className="text-sm text-muted-foreground mt-1">{pkg.description}</p>
                                     {pkg.upstreamAuthor && (
@@ -1888,12 +1880,13 @@ export default function App() {
                         {systemTasks.map((task) => {
                           const isEnableDisabled = task.id === 'enable-updates' && updateServiceStatus.enabled && updateServiceStatus.running
                           const isDisableDisabled = task.id === 'disable-updates' && !updateServiceStatus.enabled && !updateServiceStatus.running
+                          const shouldHighlight = task.id === 'disable-updates' && updateServiceStatus.enabled
                           return (
                             <Button
                               key={task.id}
                               onClick={() => handleSystemTask(task.id)}
                               disabled={commandRunning || isEnableDisabled || isDisableDisabled}
-                              variant="outline"
+                              variant={shouldHighlight ? 'default' : 'outline'}
                             >
                               {task.label}
                             </Button>
@@ -1904,57 +1897,91 @@ export default function App() {
                   </CardContent>
                 </Card>
 
-                {/* Component Maintenance Section */}
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Package Maintenance</CardTitle>
-                    <CardDescription>Package-specific commands</CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    {packages.filter(p => installedPackages.has(p.name) && maintenanceCommands[p.name]?.length > 0).length === 0 ? (
-                      <p className="text-center text-muted-foreground py-4">
-                        No installed packages have maintenance commands
-                      </p>
-                    ) : (
-                      <div className="space-y-4">
-                        {packages.filter(p => installedPackages.has(p.name) && maintenanceCommands[p.name]).sort((a, b) => a.name.localeCompare(b.name)).map((pkg) => (
-                          <div key={pkg.name}>
-                            <h4 className="font-medium mb-2">{pkg.name}</h4>
-                            <div className="grid grid-cols-3 gap-2">
-                              {maintenanceCommands[pkg.name]?.map((cmd) => {
-                                const isRunning = currentRunningCommand?.componentId === pkg.name &&
-                                                 currentRunningCommand?.commandId === cmd.id
-
-                                return (
-                                  <div key={cmd.id} className="flex gap-2">
-                                    <Button
-                                      onClick={() => handleComponentMaintenance(pkg.name, cmd.id)}
-                                      disabled={commandRunning && !isRunning}
-                                      variant="outline"
-                                      size="sm"
-                                      className="flex-1"
-                                    >
-                                      {cmd.label}
-                                    </Button>
-                                    {isRunning && cmd.allowStop && (
-                                      <Button
-                                        onClick={handleStopCommand}
-                                        variant="destructive"
-                                        size="sm"
-                                      >
-                                        Stop
-                                      </Button>
-                                    )}
-                                  </div>
-                                )
-                              })}
-                            </div>
-                          </div>
-                        ))}
+                {/* Package Maintenance Section */}
+                {vellumInstalled && (
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>Package Maintenance</CardTitle>
+                      <CardDescription>Package-specific commands</CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      {/* Vellum Commands */}
+                      <div>
+                        <h4 className="font-medium mb-2">Vellum</h4>
+                        <div className="grid grid-cols-3 gap-2">
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                onClick={handleRunReenable}
+                                disabled={commandRunning || runningReenable}
+                                variant="outline"
+                                size="sm"
+                                className="flex-1"
+                              >
+                                Reenable
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>Reenable packages that modify the system partition</TooltipContent>
+                          </Tooltip>
+                        </div>
                       </div>
-                    )}
-                  </CardContent>
-                </Card>
+
+                      {/* Separator if there are package commands */}
+                      {packages.filter(p => installedPackages.has(p.name) && maintenanceCommands[p.name]?.length > 0).length > 0 && (
+                        <div className="border-t" />
+                      )}
+
+                      {/* Package-specific Commands */}
+                      {packages.filter(p => installedPackages.has(p.name) && maintenanceCommands[p.name]?.length > 0).length > 0 && (
+                        <div className="space-y-4">
+                          {packages.filter(p => installedPackages.has(p.name) && maintenanceCommands[p.name]).sort((a, b) => a.name.localeCompare(b.name)).map((pkg) => (
+                            <div key={pkg.name}>
+                              <h4 className="font-medium mb-2">{pkg.name}</h4>
+                              <div className="grid grid-cols-3 gap-2">
+                                {maintenanceCommands[pkg.name]?.map((cmd) => {
+                                  const isRunning = currentRunningCommand?.componentId === pkg.name &&
+                                                   currentRunningCommand?.commandId === cmd.id
+                                  const isHashtabRebuild = pkg.name === 'qt-resource-rebuilder' && cmd.id === 'rebuild_hashtable'
+                                  const shouldHighlight = isHashtabRebuild && hashtabMismatch
+
+                                  return (
+                                    <div key={cmd.id} className="flex gap-2">
+                                      <Tooltip>
+                                        <TooltipTrigger asChild>
+                                          <Button
+                                            onClick={() => handleComponentMaintenance(pkg.name, cmd.id)}
+                                            disabled={commandRunning && !isRunning}
+                                            variant={shouldHighlight ? 'default' : 'outline'}
+                                            size="sm"
+                                            className="flex-1"
+                                          >
+                                            {cmd.label}
+                                          </Button>
+                                        </TooltipTrigger>
+                                        {cmd.description && (
+                                          <TooltipContent>{cmd.description}</TooltipContent>
+                                        )}
+                                      </Tooltip>
+                                      {isRunning && cmd.allowStop && (
+                                        <Button
+                                          onClick={handleStopCommand}
+                                          variant="destructive"
+                                          size="sm"
+                                        >
+                                          Stop
+                                        </Button>
+                                      )}
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                )}
               </div>
             </TabsContent>
           </Tabs>

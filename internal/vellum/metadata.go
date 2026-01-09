@@ -25,7 +25,7 @@ var fallbackRemanagerJSON []byte
 type PackageVersion struct {
 	Pkgdesc        string   `json:"pkgdesc"`
 	UpstreamAuthor string   `json:"upstream_author"`
-	Category       string   `json:"category"`
+	Categories     []string `json:"categories"`
 	License        string   `json:"license"`
 	URL            string   `json:"url"`
 	OSMin          *string  `json:"os_min"`
@@ -71,7 +71,7 @@ type Package struct {
 	Version             string
 	Description         string
 	UpstreamAuthor      string
-	Category            string
+	Categories          []string
 	License             string
 	URL                 string
 	OSMin               *string
@@ -171,7 +171,7 @@ func (m *MetadataStore) GetAllPackages() []Package {
 			Version:        latestVersion,
 			Description:    latestInfo.Pkgdesc,
 			UpstreamAuthor: latestInfo.UpstreamAuthor,
-			Category:       latestInfo.Category,
+			Categories:     latestInfo.Categories,
 			License:        latestInfo.License,
 			URL:            latestInfo.URL,
 			OSMin:          latestInfo.OSMin,
@@ -213,7 +213,7 @@ func (m *MetadataStore) GetPackage(name string) *Package {
 		Version:        latestVersion,
 		Description:    latestInfo.Pkgdesc,
 		UpstreamAuthor: latestInfo.UpstreamAuthor,
-		Category:       latestInfo.Category,
+		Categories:     latestInfo.Categories,
 		License:        latestInfo.License,
 		URL:            latestInfo.URL,
 		OSMin:          latestInfo.OSMin,

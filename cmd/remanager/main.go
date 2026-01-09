@@ -64,11 +64,13 @@ func listCmd() *cobra.Command {
 
 			categories := make(map[string][]vellum.Package)
 			for _, pkg := range packages {
-				cat := pkg.Category
-				if cat == "" {
-					cat = "other"
+				cats := pkg.Categories
+				if len(cats) == 0 {
+					cats = []string{"other"}
 				}
-				categories[cat] = append(categories[cat], pkg)
+				for _, cat := range cats {
+					categories[cat] = append(categories[cat], pkg)
+				}
 			}
 
 			for cat, pkgs := range categories {

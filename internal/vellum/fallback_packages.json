@@ -5,7 +5,7 @@
       "0.3.1": {
         "pkgdesc": "Core xovi framework for reMarkable tablets",
         "upstream_author": "asivery",
-        "category": "framework",
+        "categories": ["framework"],
         "license": "GPL-3.0",
         "url": "https://github.com/asivery/xovi",
         "os_min": "3.20",
@@ -20,7 +20,7 @@
       "0.3.0": {
         "pkgdesc": "Enables UI modifications by rebuilding Qt resources",
         "upstream_author": "asivery",
-        "category": "framework",
+        "categories": ["framework"],
         "license": "GPL-3.0",
         "url": "https://github.com/asivery/xovi",
         "devices": ["rm1", "rm2", "rmpp", "rmppm"],
@@ -33,7 +33,7 @@
       "1.0.0": {
         "pkgdesc": "Triple-press power button to start xovi",
         "upstream_author": "asivery",
-        "category": "utility",
+        "categories": ["utilities"],
         "license": "MIT",
         "url": "https://github.com/asivery/xovi-tripletap",
         "devices": ["rm1", "rm2", "rmpp", "rmppm"],
@@ -46,7 +46,7 @@
       "0.2.0": {
         "pkgdesc": "Run third-party applications on reMarkable",
         "upstream_author": "asivery",
-        "category": "apps",
+        "categories": ["apps"],
         "license": "GPL-3.0",
         "url": "https://github.com/asivery/xovi",
         "devices": ["rm1", "rm2", "rmpp", "rmppm"],

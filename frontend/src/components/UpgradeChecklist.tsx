@@ -14,7 +14,9 @@ interface UpgradeChecklistProps {
   onAddToUninstallQueue: (pkg: string) => void
   onRemoveFromUninstallQueue: (pkg: string) => void
   onRunUpgrade: () => void
-  onRunReenable: () => void
+  autoUpdatesEnabled?: boolean
+  hashtabMismatch?: boolean
+  onGoToMaintenance: () => void
 }
 
 export function UpgradeChecklist({
@@ -28,7 +30,9 @@ export function UpgradeChecklist({
   onAddToUninstallQueue,
   onRemoveFromUninstallQueue,
   onRunUpgrade,
-  onRunReenable,
+  autoUpdatesEnabled = false,
+  hashtabMismatch = false,
+  onGoToMaintenance,
 }: UpgradeChecklistProps) {
   const canUpgrade = incompatiblePackages.length === 0
 
@@ -46,6 +50,21 @@ export function UpgradeChecklist({
       </CardHeader>
 
       <CardContent className="space-y-6">
+        <div className="bg-muted p-4 rounded-md flex items-center justify-between">
+          <ul className="text-sm space-y-1">
+            {autoUpdatesEnabled && (
+              <li>• Auto-updates are enabled</li>
+            )}
+            <li>• Run Reenable to restore system modifications</li>
+            {hashtabMismatch && (
+              <li>• Rebuild hashtable after OS upgrade</li>
+            )}
+          </ul>
+          <Button variant="link" size="sm" className="h-auto p-0" onClick={onGoToMaintenance}>
+            Go to Maintenance →
+          </Button>
+        </div>
+
         {fetchFailed && (
           <div className="text-sm text-muted-foreground bg-muted p-3 rounded-md">
             Could not verify package compatibility (offline?). Showing all installed packages.
@@ -123,37 +142,26 @@ export function UpgradeChecklist({
           )}
         </Accordion>
 
-        <div className="space-y-3 pt-4 border-t">
-          <div className="text-sm font-medium">Actions</div>
-
-          <div className="flex items-center gap-2">
-            <Button variant="outline" onClick={onRunReenable} disabled={loading}>
-              Run Reenable
-            </Button>
-
-            <div className="flex-1" />
-
-            <Button
-              onClick={onRunUpgrade}
-              disabled={!canUpgrade || loading}
-              title={!canUpgrade ? 'Uninstall incompatible packages first' : undefined}
-            >
-              {loading ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Running...
-                </>
-              ) : (
-                'Run Upgrade'
-              )}
-            </Button>
-          </div>
-
+        <div className="space-y-3 pt-4">
           {!canUpgrade && (
             <p className="text-sm text-muted-foreground">
-              Uninstall incompatible packages before running upgrade.
+              Either wait for incompatible packages to be updated, or uninstall them before upgrading packages.
             </p>
           )}
+          <Button
+            className="w-full"
+            onClick={onRunUpgrade}
+            disabled={!canUpgrade || loading}
+          >
+            {loading ? (
+              <>
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                Running...
+              </>
+            ) : (
+              'Upgrade Packages'
+            )}
+          </Button>
         </div>
       </CardContent>
     </Card>

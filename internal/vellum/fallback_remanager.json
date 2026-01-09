@@ -5,7 +5,7 @@
         {
           "id": "start",
           "label": "Start",
-          "description": "Start xovi with the stock interface",
+          "description": "Start or restart xovi",
           "command": "/home/root/xovi/start",
           "requiresTerminal": true,
           "allowStop": false
@@ -13,7 +13,7 @@
         {
           "id": "stock",
           "label": "Stock",
-          "description": "Restart with stock xochitl interface",
+          "description": "Restart interface without mods applied",
           "command": "/home/root/xovi/stock",
           "requiresTerminal": true,
           "allowStop": false
@@ -21,7 +21,7 @@
         {
           "id": "debug",
           "label": "Debug",
-          "description": "Run xovi in debug mode with console output",
+          "description": "Run xovi in debug mode for troubleshooting issues",
           "command": "/home/root/xovi/debug",
           "requiresTerminal": true,
           "allowStop": true
@@ -36,7 +36,7 @@
         {
           "id": "rebuild_hashtable",
           "label": "Rebuild Hashtable",
-          "description": "Rebuild the Qt resource hashtable",
+          "description": "Rebuild Qt hashtable (required after OS upgrades)",
           "command": "/home/root/xovi/rebuild_hashtable",
           "requiresTerminal": false,
           "allowStop": false,

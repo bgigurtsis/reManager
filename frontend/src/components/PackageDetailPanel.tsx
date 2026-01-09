@@ -8,7 +8,7 @@ interface PackageInfo {
   version: string
   description: string
   upstreamAuthor: string
-  category: string
+  categories: string[]
   url: string
   license: string
   devices: string[]
@@ -91,11 +91,11 @@ export function PackageDetailPanel({
             </>
           )}
 
-          {pkg.category && (
+          {pkg.categories && pkg.categories.length > 0 && (
             <>
               <dt className="text-muted-foreground">Category</dt>
-              <dd>
-                <Badge variant="outline">{pkg.category}</Badge>
+              <dd className="flex flex-wrap gap-1">
+                {pkg.categories.map(cat => <Badge key={cat} variant="outline">{cat}</Badge>)}
               </dd>
             </>
           )}

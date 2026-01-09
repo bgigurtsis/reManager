@@ -892,7 +892,7 @@ type PackageInfo struct {
 	Version        string   `json:"version"`
 	Description    string   `json:"description"`
 	UpstreamAuthor string   `json:"upstreamAuthor"`
-	Category       string   `json:"category"`
+	Categories     []string `json:"categories"`
 	URL            string   `json:"url"`
 	License        string   `json:"license"`
 	Devices        []string `json:"devices"`
@@ -930,7 +930,7 @@ func (a *App) GetPackages() []PackageInfo {
 			Version:        pkg.Version,
 			Description:    pkg.Description,
 			UpstreamAuthor: pkg.UpstreamAuthor,
-			Category:       pkg.Category,
+			Categories:     pkg.Categories,
 			URL:            pkg.URL,
 			License:        pkg.License,
 			Devices:        pkg.Devices,
