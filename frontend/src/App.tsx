@@ -314,6 +314,10 @@ export default function App() {
   // Filter state for mod list
   const [search, setSearch] = useState('')
   const [categoryFilter, setCategoryFilter] = useState('all')
+  const [viewMode, setViewMode] = useState<'full' | 'compact'>(() => {
+    const saved = localStorage.getItem('packageViewMode')
+    return saved === 'compact' ? 'compact' : 'full'
+  })
 
   // Memoized sorted and filtered packages
   const categories = useMemo(() => {
@@ -373,6 +377,10 @@ export default function App() {
   useEffect(() => {
     commandContextRef.current = commandContext
   }, [commandContext])
+
+  useEffect(() => {
+    localStorage.setItem('packageViewMode', viewMode)
+  }, [viewMode])
 
   useEffect(() => {
     const loadInitialData = async () => {
@@ -1619,6 +1627,15 @@ export default function App() {
                         ))}
                       </SelectContent>
                     </Select>
+                    <Select value={viewMode} onValueChange={(v) => setViewMode(v as 'full' | 'compact')}>
+                      <SelectTrigger className="w-[120px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="full">Full</SelectItem>
+                        <SelectItem value="compact">Compact</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
 
                   {/* Installed Section */}
@@ -1641,15 +1658,24 @@ export default function App() {
                                     className="flex-1 min-w-0 cursor-pointer"
                                     onClick={() => setSelectedPackage(pkg)}
                                   >
-                                    <div className="flex items-center gap-2">
-                                      <span className="font-medium">{pkg.name}</span>
-                                      {(pkg.categories || []).map(cat => <Badge key={cat} variant="outline">{cat}</Badge>)}
-                                    </div>
-                                    <p className="text-sm text-muted-foreground mt-1">{pkg.description}</p>
-                                    {pkg.upstreamAuthor && (
-                                      <span className="text-sm text-muted-foreground">
-                                        by {pkg.upstreamAuthor}
-                                      </span>
+                                    {viewMode === 'compact' ? (
+                                      <div className="flex items-center gap-2">
+                                        <span className="font-medium w-[120px] md:w-[160px] lg:w-[200px] xl:w-[240px] shrink-0 truncate">{pkg.name}</span>
+                                        <span className="text-sm text-muted-foreground truncate">{pkg.description}</span>
+                                      </div>
+                                    ) : (
+                                      <>
+                                        <div className="flex items-center gap-2">
+                                          <span className="font-medium">{pkg.name}</span>
+                                          {(pkg.categories || []).map(cat => <Badge key={cat} variant="outline">{cat}</Badge>)}
+                                        </div>
+                                        <p className="text-sm text-muted-foreground mt-1">{pkg.description}</p>
+                                        {pkg.upstreamAuthor && (
+                                          <span className="text-sm text-muted-foreground">
+                                            by {pkg.upstreamAuthor}
+                                          </span>
+                                        )}
+                                      </>
                                     )}
                                   </div>
                                   {isQueued ? (
@@ -1703,15 +1729,24 @@ export default function App() {
                                     className="flex-1 min-w-0 cursor-pointer"
                                     onClick={() => setSelectedPackage(pkg)}
                                   >
-                                    <div className="flex items-center gap-2">
-                                      <span className="font-medium">{pkg.name}</span>
-                                      {(pkg.categories || []).map(cat => <Badge key={cat} variant="outline">{cat}</Badge>)}
-                                    </div>
-                                    <p className="text-sm text-muted-foreground mt-1">{pkg.description}</p>
-                                    {pkg.upstreamAuthor && (
-                                      <span className="text-sm text-muted-foreground">
-                                        by {pkg.upstreamAuthor}
-                                      </span>
+                                    {viewMode === 'compact' ? (
+                                      <div className="flex items-center gap-2">
+                                        <span className="font-medium w-[120px] md:w-[160px] lg:w-[200px] xl:w-[240px] shrink-0 truncate">{pkg.name}</span>
+                                        <span className="text-sm text-muted-foreground truncate">{pkg.description}</span>
+                                      </div>
+                                    ) : (
+                                      <>
+                                        <div className="flex items-center gap-2">
+                                          <span className="font-medium">{pkg.name}</span>
+                                          {(pkg.categories || []).map(cat => <Badge key={cat} variant="outline">{cat}</Badge>)}
+                                        </div>
+                                        <p className="text-sm text-muted-foreground mt-1">{pkg.description}</p>
+                                        {pkg.upstreamAuthor && (
+                                          <span className="text-sm text-muted-foreground">
+                                            by {pkg.upstreamAuthor}
+                                          </span>
+                                        )}
+                                      </>
                                     )}
                                   </div>
                                   {isQueued ? (
