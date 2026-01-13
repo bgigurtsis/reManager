@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
 	"time"
 
 	_ "embed"
@@ -85,6 +86,7 @@ type Package struct {
 }
 
 type MetadataStore struct {
+	mu        sync.RWMutex
 	packages  PackagesMetadata
 	remanager RemanagerMetadata
 }
@@ -110,6 +112,53 @@ func (m *MetadataStore) Load() error {
 	}
 	fmt.Printf("[DEBUG] Loaded %d remanager package configs\n", len(m.remanager.Packages))
 
+	return nil
+}
+
+func (m *MetadataStore) Refresh() error {
+	client := &http.Client{Timeout: MetadataTimeout}
+
+	var newPackages PackagesMetadata
+	var newRemanager RemanagerMetadata
+
+	resp, err := client.Get(PackagesMetadataURL)
+	if err != nil {
+		return fmt.Errorf("failed to fetch packages metadata: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("packages metadata HTTP %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read packages metadata: %w", err)
+	}
+
+	if err := json.Unmarshal(body, &newPackages); err != nil {
+		return fmt.Errorf("failed to parse packages metadata: %w", err)
+	}
+
+	resp2, err := client.Get(RemanagerMetadataURL)
+	if err == nil {
+		defer resp2.Body.Close()
+		if resp2.StatusCode == http.StatusOK {
+			body2, err := io.ReadAll(resp2.Body)
+			if err == nil {
+				json.Unmarshal(body2, &newRemanager)
+			}
+		}
+	}
+
+	m.mu.Lock()
+	m.packages = newPackages
+	if len(newRemanager.Packages) > 0 {
+		m.remanager = newRemanager
+	}
+	m.mu.Unlock()
+
+	fmt.Printf("[DEBUG] Refreshed metadata: %d packages, %d remanager configs\n", len(m.packages.Packages), len(m.remanager.Packages))
 	return nil
 }
 
@@ -154,6 +203,9 @@ func (m *MetadataStore) loadRemanagerMetadata() error {
 }
 
 func (m *MetadataStore) GetAllPackages() []Package {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
 	var packages []Package
 
 	for name, versions := range m.packages.Packages {
@@ -194,6 +246,9 @@ func (m *MetadataStore) GetAllPackages() []Package {
 }
 
 func (m *MetadataStore) GetPackage(name string) *Package {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
 	versions, ok := m.packages.Packages[name]
 	if !ok {
 		return nil
@@ -233,6 +288,9 @@ func (m *MetadataStore) GetPackage(name string) *Package {
 }
 
 func (m *MetadataStore) GetMaintenanceCommands(name string) []MaintenanceCommand {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
 	if rmInfo, ok := m.remanager.Packages[name]; ok {
 		return rmInfo.MaintenanceCommands
 	}
@@ -240,6 +298,9 @@ func (m *MetadataStore) GetMaintenanceCommands(name string) []MaintenanceCommand
 }
 
 func (m *MetadataStore) GetHooks(name string) *PackageHooks {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
 	if rmInfo, ok := m.remanager.Packages[name]; ok {
 		return rmInfo.Hooks
 	}

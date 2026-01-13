@@ -2,6 +2,7 @@ import { DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { Progress } from '@/components/ui/progress'
 import { Button } from '@/components/ui/button'
 import { Terminal } from '@/components/Terminal'
+import { Loader2 } from 'lucide-react'
 
 interface ProgressModalProps {
   title: string
@@ -26,19 +27,18 @@ export function ProgressModal({
         <DialogTitle>{title}</DialogTitle>
       </DialogHeader>
       <div className="space-y-4">
-        <p className="text-sm font-medium text-center text-foreground">
+        <p className="text-sm font-medium text-center text-foreground flex items-center justify-center gap-2">
+          {!isComplete && <Loader2 className="h-4 w-4 animate-spin" />}
           {progressText}
         </p>
         <Progress value={percentage} />
-        <div className="h-[400px] rounded-lg overflow-hidden">
+        <div className="h-[400px] rounded-lg overflow-hidden overscroll-y-contain">
           <Terminal output={terminalOutput} />
         </div>
       </div>
-      {isComplete && (
-        <DialogFooter>
-          <Button onClick={onClose}>Close</Button>
-        </DialogFooter>
-      )}
+      <DialogFooter>
+        <Button onClick={onClose} className={isComplete ? '' : 'invisible'}>Close</Button>
+      </DialogFooter>
     </>
   )
 }

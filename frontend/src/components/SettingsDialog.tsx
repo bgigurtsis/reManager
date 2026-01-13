@@ -13,7 +13,8 @@ interface SettingsDialogProps {
   isConnected: boolean
   vellumInstalled: boolean | null
   tabVisibility: Record<string, boolean>
-  onSaveSettings: (tabVisibility: Record<string, boolean>) => void
+  proxyMode: boolean
+  onSaveSettings: (tabVisibility: Record<string, boolean>, proxyMode: boolean) => void
   onUninstallVellum: (removeAllPackages: boolean) => void
   uninstalling: boolean
   uninstallOutput: string
@@ -26,6 +27,7 @@ export function SettingsDialog({
   isConnected,
   vellumInstalled,
   tabVisibility,
+  proxyMode,
   onSaveSettings,
   onUninstallVellum,
   uninstalling,
@@ -33,23 +35,26 @@ export function SettingsDialog({
   appVersion,
 }: SettingsDialogProps) {
   const [localTabVisibility, setLocalTabVisibility] = useState(tabVisibility)
+  const [localProxyMode, setLocalProxyMode] = useState(proxyMode)
   const [showUninstallConfirm, setShowUninstallConfirm] = useState(false)
   const [removePackages, setRemovePackages] = useState(true)
 
   useEffect(() => {
     if (open) {
       setLocalTabVisibility(tabVisibility)
+      setLocalProxyMode(proxyMode)
     }
-  }, [open, tabVisibility])
+  }, [open, tabVisibility, proxyMode])
 
   const handleCancel = () => {
     setLocalTabVisibility(tabVisibility)
+    setLocalProxyMode(proxyMode)
     setShowUninstallConfirm(false)
     onOpenChange(false)
   }
 
   const handleSave = () => {
-    onSaveSettings(localTabVisibility)
+    onSaveSettings(localTabVisibility, localProxyMode)
     onOpenChange(false)
   }
 
@@ -57,6 +62,7 @@ export function SettingsDialog({
     if (!newOpen) {
       setShowUninstallConfirm(false)
       setLocalTabVisibility(tabVisibility)
+      setLocalProxyMode(proxyMode)
     }
     onOpenChange(newOpen)
   }
@@ -86,6 +92,26 @@ export function SettingsDialog({
                   id="tab-mods"
                   checked={localTabVisibility.mods}
                   onCheckedChange={(v) => setLocalTabVisibility({ ...localTabVisibility, mods: v })}
+                />
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm">Proxy Mode</CardTitle>
+              <CardDescription className="text-xs">
+                Download packages through reManager before installing on the tablet.
+                This allows installing packages even if the tablet is not connected to the internet or has connectivity issues.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center justify-between">
+                <Label htmlFor="proxy-mode" className="font-normal">Enable Proxy Mode</Label>
+                <Switch
+                  id="proxy-mode"
+                  checked={localProxyMode}
+                  onCheckedChange={setLocalProxyMode}
                 />
               </div>
             </CardContent>

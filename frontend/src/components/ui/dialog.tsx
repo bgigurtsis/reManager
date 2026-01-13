@@ -10,6 +10,15 @@ interface DialogProps {
 }
 
 export function Dialog({ open, onOpenChange, children, closable = true, className }: DialogProps) {
+  React.useEffect(() => {
+    if (open) {
+      document.body.style.overflow = 'hidden'
+      return () => {
+        document.body.style.overflow = ''
+      }
+    }
+  }, [open])
+
   if (!open) return null
 
   return (

@@ -14,6 +14,7 @@ type TabVisibility struct {
 
 type Settings struct {
 	TabVisibility TabVisibility `json:"tabVisibility"`
+	ProxyMode     bool          `json:"proxyMode"`
 }
 
 type SettingsStore struct {
@@ -52,6 +53,15 @@ func (s *SettingsStore) Load() (*Settings, error) {
 	if err := json.Unmarshal(data, &settings); err != nil {
 		return s.defaultSettings(), nil
 	}
+
+	// Check if proxyMode was present in JSON (default to true if missing)
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err == nil {
+		if _, exists := raw["proxyMode"]; !exists {
+			settings.ProxyMode = true
+		}
+	}
+
 	return &settings, nil
 }
 
@@ -72,5 +82,6 @@ func (s *SettingsStore) defaultSettings() *Settings {
 			Mods:        true,
 			Maintenance: true,
 		},
+		ProxyMode: true,
 	}
 }

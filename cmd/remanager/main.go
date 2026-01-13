@@ -158,8 +158,10 @@ func bootstrapCmd() *cobra.Command {
 				return nil
 			}
 
+			arch := device.GetArchitecture(component.DeviceType(deviceType))
+
 			fmt.Println("Installing vellum...")
-			err = vellumClient.Bootstrap(func(line string) {
+			err = vellumClient.BootstrapOfflineWithPackages(client, arch, func(line string) {
 				fmt.Print(line)
 			})
 

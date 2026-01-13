@@ -15,9 +15,10 @@ import { NotificationBanner } from '@/components/NotificationBanner'
 import { UpgradeChecklist } from '@/components/UpgradeChecklist'
 import { VellumInstallPrompt } from '@/components/VellumInstallPrompt'
 import { SettingsDialog } from '@/components/SettingsDialog'
+import { DnsErrorModal } from '@/components/DnsErrorModal'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { Badge } from '@/components/ui/badge'
-import { Loader2, Unplug, Check, AlertTriangle, Trash2, Plus, X, Search, Settings } from 'lucide-react'
+import { Loader2, Unplug, Check, AlertTriangle, Trash2, Plus, X, Search, Settings, WifiOff } from 'lucide-react'
 
 interface PackageInfo {
   name: string
@@ -81,6 +82,7 @@ interface InstallProgress {
 interface InstallResult {
   success: boolean
   errors: string[]
+  dnsError?: boolean
 }
 
 interface DialogRequest {
@@ -142,7 +144,7 @@ declare global {
           BootstrapVellum(): Promise<void>
           CheckPackageInstalled(pkgName: string): Promise<boolean>
           CheckHashtabVersion(): Promise<HashtabVersionStatus>
-          GetPackages(): Promise<PackageInfo[]>
+          GetPackages(deviceType: string): Promise<PackageInfo[]>
           GetInstalledPackages(): Promise<string[]>
           GetInstalledPackagesWithOsCheck(): Promise<InstalledPackagesResult>
           RunReenable(): Promise<void>
@@ -167,8 +169,8 @@ declare global {
           RunSystemTask(taskId: string, deviceType: string): Promise<void>
           RespondToDialog(confirmed: boolean): Promise<void>
           GetAppVersion(): Promise<string>
-          GetSettings(): Promise<{ tabVisibility: Record<string, boolean> }>
-          SaveSettings(tabVisibility: Record<string, boolean>): Promise<void>
+          GetSettings(): Promise<{ tabVisibility: Record<string, boolean>; proxyMode: boolean }>
+          SaveSettings(tabVisibility: Record<string, boolean>, proxyMode: boolean): Promise<void>
           UninstallVellum(removeAllPackages: boolean): Promise<void>
         }
       }
@@ -240,6 +242,9 @@ export default function App() {
     mods: true,
     maintenance: true,
   })
+  const [proxyMode, setProxyMode] = useState(true)
+  const [dnsErrorShown, setDnsErrorShown] = useState(false)
+  const [showDnsErrorModal, setShowDnsErrorModal] = useState(false)
   const [vellumUninstalling, setVellumUninstalling] = useState(false)
   const [vellumUninstallOutput, setVellumUninstallOutput] = useState('')
 
@@ -299,6 +304,12 @@ export default function App() {
 
   // Hashtab version mismatch state
   const [hashtabMismatch, setHashtabMismatch] = useState<HashtabVersionStatus | null>(null)
+
+  // Connection status state
+  const [connectionStatus, setConnectionStatus] = useState<'connected' | 'lost' | 'reconnecting' | 'failed'>('connected')
+  const [reconnectAttempt, setReconnectAttempt] = useState(0)
+  const [reconnectMaxAttempts, setReconnectMaxAttempts] = useState(0)
+  const [connectionError, setConnectionError] = useState<string | null>(null)
 
   // Filter state for mod list
   const [search, setSearch] = useState('')
@@ -369,7 +380,7 @@ export default function App() {
         console.log('[DEBUG] loadInitialData: starting')
         const [keys, pkgs, tasks, devices, version, settings] = await Promise.all([
           window.go.main.App.GetDefaultSSHKeys(),
-          window.go.main.App.GetPackages(),
+          window.go.main.App.GetPackages(''),
           window.go.main.App.GetSystemTasksInfo(),
           window.go.main.App.GetSavedDevices(),
           window.go.main.App.GetAppVersion(),
@@ -389,6 +400,7 @@ export default function App() {
         setSavedDevices(devices || [])
         setAppVersion(version || 'dev')
         setTabVisibility(settings?.tabVisibility || { mods: true, maintenance: true })
+        setProxyMode(settings?.proxyMode ?? true)
       } catch (err) {
         console.log('Could not load initial data:', err)
         setSelectedKey('__other__')
@@ -436,8 +448,12 @@ export default function App() {
 
       if (result.success) {
         const info = await window.go.main.App.GetDeviceInfo()
-        setDevice(result.device || 'unknown')
+        const deviceType = result.device || 'unknown'
+        setDevice(deviceType)
         setDeviceInfo(info)
+
+        const filteredPkgs = await window.go.main.App.GetPackages(deviceType)
+        setPackages(filteredPkgs || [])
 
         console.log('[DEBUG] handleConnectToSavedDevice: calling GetInstalledPackagesWithOsCheck')
         const installedResult = await window.go.main.App.GetInstalledPackagesWithOsCheck()
@@ -450,7 +466,7 @@ export default function App() {
         }
 
         const maintCmds: Record<string, MaintenanceCommandInfo[]> = {}
-        for (const pkg of packages) {
+        for (const pkg of filteredPkgs) {
           const cmds = await window.go.main.App.GetMaintenanceCommands(pkg.name)
           if (cmds && cmds.length > 0) {
             maintCmds[pkg.name] = cmds
@@ -592,8 +608,10 @@ export default function App() {
         setProgressPercentage(Math.round((completedCount / progress.total) * 100))
       }
 
-      if (progress.status === 'installing') {
-        setOutput((prev) => prev + `\n=== Installing ${progress.component} ===\n`)
+      if (progress.status === 'downloading' || progress.status === 'installing') {
+        if (progress.message) {
+          setOutput((prev) => prev + progress.message + '\n')
+        }
       } else if (progress.status === 'completed') {
         setOutput((prev) => prev + `${progress.message}\n`)
       } else if (progress.status === 'error') {
@@ -612,6 +630,13 @@ export default function App() {
         setProgressPercentage(100)
       } else {
         setOutput((prev) => prev + `\nErrors occurred:\n${result.errors.join('\n')}\n`)
+      }
+
+      // Show DNS error modal if proxy mode is disabled and DNS error detected (once per session)
+      const currentProxyMode = await window.go.main.App.GetSettings().then(s => s.proxyMode)
+      if (result.dnsError && !currentProxyMode && !dnsErrorShown) {
+        setShowDnsErrorModal(true)
+        setDnsErrorShown(true)
       }
 
       await rescanAllPackages()
@@ -753,6 +778,37 @@ export default function App() {
       setTimeout(() => setShowAutoUpdateBanner(true), 1000)
     })
 
+    const unsubscribeConnectionLost = window.runtime.EventsOn('connection:lost', (...args: unknown[]) => {
+      const data = args[0] as { reason: string; deviceId: string }
+      console.log('Received connection:lost:', data)
+      setConnectionStatus('lost')
+      setConnectionError(data.reason)
+    })
+
+    const unsubscribeConnectionReconnecting = window.runtime.EventsOn('connection:reconnecting', (...args: unknown[]) => {
+      const data = args[0] as { attempt: number; maxAttempts: number; deviceId: string }
+      console.log('Received connection:reconnecting:', data)
+      setConnectionStatus('reconnecting')
+      setReconnectAttempt(data.attempt)
+      setReconnectMaxAttempts(data.maxAttempts)
+    })
+
+    const unsubscribeConnectionRestored = window.runtime.EventsOn('connection:restored', async (...args: unknown[]) => {
+      const data = args[0] as { deviceId: string; device: string }
+      console.log('Received connection:restored:', data)
+      setConnectionStatus('connected')
+      setConnectionError(null)
+      setReconnectAttempt(0)
+      await rescanAllPackages()
+    })
+
+    const unsubscribeConnectionFailed = window.runtime.EventsOn('connection:failed', (...args: unknown[]) => {
+      const data = args[0] as { reason: string; deviceId: string }
+      console.log('Received connection:failed:', data)
+      setConnectionStatus('failed')
+      setConnectionError(data.reason)
+    })
+
     return () => {
       unsubscribeOutput()
       unsubscribeDone()
@@ -775,6 +831,10 @@ export default function App() {
       unsubscribeUpgradeError()
       unsubscribeUpgradeComplete()
       unsubscribeAutoUpdate()
+      unsubscribeConnectionLost()
+      unsubscribeConnectionReconnecting()
+      unsubscribeConnectionRestored()
+      unsubscribeConnectionFailed()
     }
   }, [])
 
@@ -809,8 +869,12 @@ export default function App() {
 
       if (result.success) {
         const info = await window.go.main.App.GetDeviceInfo()
-        setDevice(result.device || 'unknown')
+        const deviceType = result.device || 'unknown'
+        setDevice(deviceType)
         setDeviceInfo(info)
+
+        const filteredPkgs = await window.go.main.App.GetPackages(deviceType)
+        setPackages(filteredPkgs || [])
 
         console.log('[DEBUG] handleConnect: calling GetInstalledPackagesWithOsCheck')
         const installedResult = await window.go.main.App.GetInstalledPackagesWithOsCheck()
@@ -823,7 +887,7 @@ export default function App() {
         }
 
         const maintCmds: Record<string, MaintenanceCommandInfo[]> = {}
-        for (const pkg of packages) {
+        for (const pkg of filteredPkgs) {
           const cmds = await window.go.main.App.GetMaintenanceCommands(pkg.name)
           if (cmds && cmds.length > 0) {
             maintCmds[pkg.name] = cmds
@@ -901,11 +965,21 @@ export default function App() {
     setBootstrapError(null)
     setVellumUninstalling(false)
     setVellumUninstallOutput('')
+    setConnectionStatus('connected')
+    setConnectionError(null)
+    setReconnectAttempt(0)
   }
 
-  const handleSaveSettings = async (newTabVisibility: Record<string, boolean>) => {
+  const handleSaveSettings = async (newTabVisibility: Record<string, boolean>, newProxyMode: boolean) => {
     setTabVisibility(newTabVisibility)
-    await window.go.main.App.SaveSettings(newTabVisibility)
+    setProxyMode(newProxyMode)
+    await window.go.main.App.SaveSettings(newTabVisibility, newProxyMode)
+  }
+
+  const handleEnableProxyModeFromModal = async () => {
+    setProxyMode(true)
+    await window.go.main.App.SaveSettings(tabVisibility, true)
+    setShowDnsErrorModal(false)
   }
 
   const handleUninstallVellum = (removeAllPackages: boolean) => {
@@ -1422,6 +1496,33 @@ export default function App() {
           </>
         )}
 
+        {/* Connection Status Banner */}
+        {step !== 'connect' && connectionStatus !== 'connected' && (
+          <div className="mb-4">
+            <div className={`rounded-lg p-4 flex items-center justify-between gap-4 ${
+              connectionStatus === 'failed'
+                ? 'bg-destructive/10 border border-destructive/20'
+                : 'bg-orange-500/10 border border-orange-500/20'
+            }`}>
+              <div className="flex items-center gap-3">
+                {connectionStatus === 'reconnecting' ? (
+                  <Loader2 className="h-5 w-5 text-orange-500 animate-spin flex-shrink-0" />
+                ) : (
+                  <WifiOff className={`h-5 w-5 flex-shrink-0 ${connectionStatus === 'failed' ? 'text-destructive' : 'text-orange-500'}`} />
+                )}
+                <span className="text-sm">
+                  {connectionStatus === 'lost' && 'Connection lost. Attempting to reconnect...'}
+                  {connectionStatus === 'reconnecting' && `Reconnecting... (attempt ${reconnectAttempt}/${reconnectMaxAttempts})`}
+                  {connectionStatus === 'failed' && (connectionError || 'Connection failed')}
+                </span>
+              </div>
+              <Button size="sm" onClick={handleDisconnect}>
+                Disconnect
+              </Button>
+            </div>
+          </div>
+        )}
+
         {/* Notification Banners */}
         {step !== 'connect' && osUpgradeDetected && (
           <div className="mb-4">
@@ -1565,7 +1666,7 @@ export default function App() {
                                       variant="outline"
                                       size="sm"
                                       onClick={() => addToUninstallQueue(pkg.name)}
-                                      disabled={installing || uninstalling}
+                                      disabled={installing || uninstalling || connectionStatus !== 'connected'}
                                     >
                                       <Trash2 className="h-4 w-4 mr-1" />
                                       Remove
@@ -1643,7 +1744,7 @@ export default function App() {
                                       variant="outline"
                                       size="sm"
                                       onClick={() => addToQueue(pkg.name)}
-                                      disabled={installing || uninstalling}
+                                      disabled={installing || uninstalling || connectionStatus !== 'connected'}
                                     >
                                       <Plus className="h-4 w-4 mr-1" />
                                       Add
@@ -1737,7 +1838,7 @@ export default function App() {
                               setSimulatingInstall(false)
                             }
                           }}
-                          disabled={installing || uninstalling || simulatingInstall}
+                          disabled={installing || uninstalling || simulatingInstall || connectionStatus !== 'connected'}
                         >
                           {installing ? (
                             <>
@@ -1831,7 +1932,7 @@ export default function App() {
                               setSimulatingUninstall(false)
                             }
                           }}
-                          disabled={installing || uninstalling || simulatingUninstall}
+                          disabled={installing || uninstalling || simulatingUninstall || connectionStatus !== 'connected'}
                         >
                           {uninstalling ? (
                             <>
@@ -1885,7 +1986,7 @@ export default function App() {
                             <Button
                               key={task.id}
                               onClick={() => handleSystemTask(task.id)}
-                              disabled={commandRunning || isEnableDisabled || isDisableDisabled}
+                              disabled={commandRunning || isEnableDisabled || isDisableDisabled || connectionStatus !== 'connected'}
                               variant={shouldHighlight ? 'default' : 'outline'}
                             >
                               {task.label}
@@ -1913,7 +2014,7 @@ export default function App() {
                             <TooltipTrigger asChild>
                               <Button
                                 onClick={handleRunReenable}
-                                disabled={commandRunning || runningReenable}
+                                disabled={commandRunning || runningReenable || connectionStatus !== 'connected'}
                                 variant="outline"
                                 size="sm"
                                 className="flex-1"
@@ -1950,7 +2051,7 @@ export default function App() {
                                         <TooltipTrigger asChild>
                                           <Button
                                             onClick={() => handleComponentMaintenance(pkg.name, cmd.id)}
-                                            disabled={commandRunning && !isRunning}
+                                            disabled={(commandRunning && !isRunning) || connectionStatus !== 'connected'}
                                             variant={shouldHighlight ? 'default' : 'outline'}
                                             size="sm"
                                             className="flex-1"
@@ -2342,11 +2443,14 @@ export default function App() {
               }}
               isQueued={installQueue.has(selectedPackage.name) || uninstallQueue.has(selectedPackage.name)}
               queueType={installQueue.has(selectedPackage.name) ? 'install' : uninstallQueue.has(selectedPackage.name) ? 'uninstall' : null}
-              disabled={installing || uninstalling}
+              disabled={installing || uninstalling || connectionStatus !== 'connected'}
               onSelectPackage={(name) => {
                 const pkg = packages.find(p => p.name === name)
                 if (pkg) setSelectedPackage(pkg)
               }}
+              firmware={deviceInfo.firmware || ''}
+              conflict={getConflict(selectedPackage)}
+              isOsCompatible={isPackageCompatible(selectedPackage, deviceInfo.firmware || '')}
             />
           )}
         </SheetContent>
@@ -2358,11 +2462,18 @@ export default function App() {
         isConnected={!!device}
         vellumInstalled={vellumInstalled}
         tabVisibility={tabVisibility}
+        proxyMode={proxyMode}
         onSaveSettings={handleSaveSettings}
         onUninstallVellum={handleUninstallVellum}
         uninstalling={vellumUninstalling}
         uninstallOutput={vellumUninstallOutput}
         appVersion={appVersion}
+      />
+
+      <DnsErrorModal
+        open={showDnsErrorModal}
+        onClose={() => setShowDnsErrorModal(false)}
+        onEnableProxyMode={handleEnableProxyModeFromModal}
       />
 
     </div>

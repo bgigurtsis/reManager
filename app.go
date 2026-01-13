@@ -38,6 +38,12 @@ type App struct {
 	settingsStore  *storage.SettingsStore
 	vellumClient   *vellum.Client
 	metadata       *vellum.MetadataStore
+
+	keepaliveStop     chan struct{}
+	connectedDeviceID string
+	reconnecting      bool
+	reconnectMu       sync.Mutex
+	fastDialMode      bool
 }
 
 func NewApp() *App {
@@ -210,6 +216,12 @@ func (a *App) ConnectToSavedDevice(id string) ConnectionResult {
 
 	if result.Success {
 		a.deviceStore.UpdateLastConnected(id, time.Now().Unix())
+
+		a.mu.Lock()
+		a.connectedDeviceID = id
+		a.mu.Unlock()
+
+		a.startConnectionMonitor()
 	}
 
 	return result
@@ -233,9 +245,26 @@ func (a *App) BootstrapVellum() {
 			return
 		}
 
+		a.mu.Lock()
+		sshClient := a.client
+		a.mu.Unlock()
+
+		if sshClient == nil {
+			runtime.EventsEmit(a.ctx, "vellum:bootstrap-error", "SSH client not available")
+			return
+		}
+
+		deviceType, err := a.detectDevice()
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "vellum:bootstrap-error", fmt.Sprintf("Failed to detect device: %v", err))
+			return
+		}
+
+		arch := device.GetArchitecture(component.DeviceType(deviceType))
+
 		runtime.EventsEmit(a.ctx, "vellum:bootstrap-start", nil)
 
-		err := a.vellumClient.Bootstrap(func(line string) {
+		err = a.vellumClient.BootstrapOfflineWithPackages(sshClient, arch, func(line string) {
 			runtime.EventsEmit(a.ctx, "vellum:bootstrap-output", line)
 		})
 
@@ -277,7 +306,11 @@ func (a *App) CancelConnect() {
 }
 
 func (a *App) dialWithContext(ctx context.Context, addr string, config *ssh.ClientConfig) (*ssh.Client, error) {
-	d := net.Dialer{Timeout: 10 * time.Second}
+	timeout := 10 * time.Second
+	if a.fastDialMode {
+		timeout = 5 * time.Second
+	}
+	d := net.Dialer{Timeout: timeout}
 	conn, err := d.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return nil, err
@@ -340,11 +373,19 @@ func isRetryableError(err error) bool {
 }
 
 func (a *App) dialWithContextWithRetry(ctx context.Context, addr string, config *ssh.ClientConfig) (*ssh.Client, error) {
-	const maxRetries = 3
-	backoffDurations := []time.Duration{
-		2 * time.Second,
-		4 * time.Second,
-		8 * time.Second,
+	var maxRetries int
+	var backoffDurations []time.Duration
+
+	if a.fastDialMode {
+		maxRetries = 0
+		backoffDurations = []time.Duration{}
+	} else {
+		maxRetries = 3
+		backoffDurations = []time.Duration{
+			2 * time.Second,
+			4 * time.Second,
+			8 * time.Second,
+		}
 	}
 
 	var lastErr error
@@ -356,11 +397,14 @@ func (a *App) dialWithContextWithRetry(ctx context.Context, addr string, config 
 		default:
 		}
 
+		fmt.Printf("[%s] dialWithContextWithRetry attempt %d/%d to %s\n", time.Now().Format("15:04:05.000"), attempt+1, maxRetries+1, addr)
 		client, err := a.dialWithContext(ctx, addr, config)
 		if err == nil {
+			fmt.Printf("[%s] dialWithContextWithRetry attempt %d/%d succeeded\n", time.Now().Format("15:04:05.000"), attempt+1, maxRetries+1)
 			return client, nil
 		}
 
+		fmt.Printf("[%s] dialWithContextWithRetry attempt %d/%d failed: %v\n", time.Now().Format("15:04:05.000"), attempt+1, maxRetries+1, err)
 		lastErr = err
 
 		if ctx.Err() == context.Canceled {
@@ -368,6 +412,7 @@ func (a *App) dialWithContextWithRetry(ctx context.Context, addr string, config 
 		}
 
 		if !isRetryableError(err) {
+			fmt.Printf("[%s] Error not retryable, giving up\n", time.Now().Format("15:04:05.000"))
 			return nil, err
 		}
 
@@ -376,6 +421,7 @@ func (a *App) dialWithContextWithRetry(ctx context.Context, addr string, config 
 		}
 
 		backoffDuration := backoffDurations[attempt]
+		fmt.Printf("[%s] dialWithContextWithRetry waiting %v before retry\n", time.Now().Format("15:04:05.000"), backoffDuration)
 
 		select {
 		case <-time.After(backoffDuration):
@@ -389,7 +435,11 @@ func (a *App) dialWithContextWithRetry(ctx context.Context, addr string, config 
 }
 
 func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) ConnectionResult {
+	a.stopConnectionMonitor()
+
 	a.mu.Lock()
+
+	a.connectedDeviceID = ""
 
 	if a.connectCancel != nil {
 		a.connectCancel()
@@ -513,6 +563,10 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 	}
 
 	go func() {
+		if err := a.metadata.Refresh(); err != nil {
+			fmt.Printf("[DEBUG] Metadata refresh failed: %v\n", err)
+		}
+
 		fmt.Println("[DEBUG] Checking if vellum is installed...")
 		installed, err := a.vellumClient.IsInstalled()
 		fmt.Printf("[DEBUG] Vellum installed: %v, err: %v\n", installed, err)
@@ -575,8 +629,16 @@ func (a *App) detectDevice() (string, error) {
 }
 
 func (a *App) Disconnect() {
+	a.stopConnectionMonitor()
+
+	a.reconnectMu.Lock()
+	a.reconnecting = false
+	a.reconnectMu.Unlock()
+
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
+	a.connectedDeviceID = ""
 
 	if a.client != nil {
 		a.client.Close()
@@ -589,6 +651,195 @@ func (a *App) IsConnected() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.client != nil
+}
+
+const (
+	keepaliveInterval    = 15 * time.Second
+	keepaliveTimeout     = 5 * time.Second
+	maxReconnectAttempts = 5
+)
+
+var reconnectBackoff = []time.Duration{
+	2 * time.Second,
+	4 * time.Second,
+	8 * time.Second,
+	16 * time.Second,
+	30 * time.Second,
+}
+
+func (a *App) startConnectionMonitor() {
+	a.mu.Lock()
+	if a.keepaliveStop != nil {
+		a.mu.Unlock()
+		return
+	}
+	a.keepaliveStop = make(chan struct{})
+	a.mu.Unlock()
+
+	go a.connectionMonitorLoop()
+}
+
+func (a *App) stopConnectionMonitor() {
+	a.mu.Lock()
+	if a.keepaliveStop != nil {
+		close(a.keepaliveStop)
+		a.keepaliveStop = nil
+	}
+	a.mu.Unlock()
+}
+
+func (a *App) connectionMonitorLoop() {
+	ticker := time.NewTicker(keepaliveInterval)
+	defer ticker.Stop()
+
+	a.mu.Lock()
+	stopCh := a.keepaliveStop
+	a.mu.Unlock()
+
+	for {
+		select {
+		case <-stopCh:
+			return
+		case <-ticker.C:
+			if err := a.checkConnection(); err != nil {
+				a.handleConnectionLost(err)
+				return
+			}
+		}
+	}
+}
+
+func (a *App) checkConnection() error {
+	a.mu.Lock()
+	client := a.client
+	a.mu.Unlock()
+
+	if client == nil {
+		return fmt.Errorf("client is nil")
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := client.SendRequest("keepalive@openssh.com", true, nil)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(keepaliveTimeout):
+		return fmt.Errorf("keepalive timeout")
+	}
+}
+
+func (a *App) handleConnectionLost(err error) {
+	a.mu.Lock()
+	if a.commandSession != nil {
+		a.commandSession.Close()
+		a.commandSession = nil
+		a.commandStdin = nil
+	}
+	if a.client != nil {
+		a.client.Close()
+		a.client = nil
+	}
+	a.vellumClient = nil
+	deviceID := a.connectedDeviceID
+	a.keepaliveStop = nil
+	a.mu.Unlock()
+
+	runtime.EventsEmit(a.ctx, "command:output", "\nConnection lost.\n")
+	runtime.EventsEmit(a.ctx, "command:done", false)
+
+	runtime.EventsEmit(a.ctx, "connection:lost", map[string]interface{}{
+		"reason":   err.Error(),
+		"deviceId": deviceID,
+	})
+
+	if deviceID != "" {
+		go a.attemptReconnect(deviceID)
+	} else {
+		runtime.EventsEmit(a.ctx, "connection:failed", map[string]interface{}{
+			"reason":   "Connection lost. Manual reconnection required.",
+			"deviceId": "",
+		})
+	}
+}
+
+func (a *App) attemptReconnect(deviceID string) {
+	fmt.Printf("[%s] attemptReconnect started for device %s\n", time.Now().Format("15:04:05.000"), deviceID)
+
+	a.reconnectMu.Lock()
+	if a.reconnecting {
+		a.reconnectMu.Unlock()
+		fmt.Printf("[%s] Already reconnecting, skipping\n", time.Now().Format("15:04:05.000"))
+		return
+	}
+	a.reconnecting = true
+	a.fastDialMode = true
+	a.reconnectMu.Unlock()
+
+	defer func() {
+		a.reconnectMu.Lock()
+		a.reconnecting = false
+		a.fastDialMode = false
+		a.reconnectMu.Unlock()
+		fmt.Printf("[%s] attemptReconnect finished\n", time.Now().Format("15:04:05.000"))
+	}()
+
+	for attempt := 0; attempt < maxReconnectAttempts; attempt++ {
+		a.reconnectMu.Lock()
+		stillReconnecting := a.reconnecting
+		a.reconnectMu.Unlock()
+
+		if !stillReconnecting {
+			fmt.Printf("[%s] Reconnect cancelled\n", time.Now().Format("15:04:05.000"))
+			return
+		}
+
+		fmt.Printf("[%s] Reconnect attempt %d/%d starting\n", time.Now().Format("15:04:05.000"), attempt+1, maxReconnectAttempts)
+
+		runtime.EventsEmit(a.ctx, "connection:reconnecting", map[string]interface{}{
+			"attempt":     attempt + 1,
+			"maxAttempts": maxReconnectAttempts,
+			"deviceId":    deviceID,
+		})
+
+		result := a.ConnectToSavedDevice(deviceID)
+		fmt.Printf("[%s] Reconnect attempt %d/%d result: success=%v, message=%s\n", time.Now().Format("15:04:05.000"), attempt+1, maxReconnectAttempts, result.Success, result.Message)
+
+		if result.Success {
+			runtime.EventsEmit(a.ctx, "connection:restored", map[string]interface{}{
+				"deviceId": deviceID,
+				"device":   result.Device,
+			})
+			return
+		}
+
+		if !isRetryableError(errors.New(result.Message)) {
+			runtime.EventsEmit(a.ctx, "connection:failed", map[string]interface{}{
+				"reason":   result.Message,
+				"deviceId": deviceID,
+			})
+			return
+		}
+
+		if attempt < maxReconnectAttempts-1 {
+			backoffIdx := attempt
+			if backoffIdx >= len(reconnectBackoff) {
+				backoffIdx = len(reconnectBackoff) - 1
+			}
+			fmt.Printf("[%s] Waiting %v before next attempt\n", time.Now().Format("15:04:05.000"), reconnectBackoff[backoffIdx])
+			time.Sleep(reconnectBackoff[backoffIdx])
+			fmt.Printf("[%s] Backoff complete\n", time.Now().Format("15:04:05.000"))
+		}
+	}
+
+	fmt.Printf("[%s] All reconnect attempts exhausted\n", time.Now().Format("15:04:05.000"))
+	runtime.EventsEmit(a.ctx, "connection:failed", map[string]interface{}{
+		"reason":   "Maximum reconnection attempts exceeded",
+		"deviceId": deviceID,
+	})
 }
 
 func (a *App) runCommand(cmd string) (string, error) {
@@ -909,14 +1160,26 @@ var hiddenPackages = map[string]bool{
 	"/bin/sh":                true,
 }
 
-func (a *App) GetPackages() []PackageInfo {
-	fmt.Printf("[DEBUG] GetPackages called, metadata=%p\n", a.metadata)
+func containsString(slice []string, s string) bool {
+	for _, v := range slice {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *App) GetPackages(deviceType string) []PackageInfo {
+	fmt.Printf("[DEBUG] GetPackages called, metadata=%p, deviceType=%s\n", a.metadata, deviceType)
 	packages := a.metadata.GetAllPackages()
 	fmt.Printf("[DEBUG] GetPackages got %d packages\n", len(packages))
 	var result []PackageInfo
 
 	for _, pkg := range packages {
 		if hiddenPackages[pkg.Name] {
+			continue
+		}
+		if len(pkg.Devices) > 0 && !containsString(pkg.Devices, deviceType) {
 			continue
 		}
 		var visibleDepends []string
@@ -1365,17 +1628,21 @@ func (a *App) InstallPackages(packageNames []string, deviceType string) {
 			Device: component.DeviceType(deviceType),
 		}
 
+		// Check proxy mode setting
+		settings, _ := a.settingsStore.Load()
+		proxyEnabled := settings == nil || settings.ProxyMode
+
 		// Proxy download packages first
 		a.mu.Lock()
 		sshClient := a.client
 		a.mu.Unlock()
 
 		var allPackages []string
-		if sshClient != nil {
+		if sshClient != nil && proxyEnabled {
 			proxy := vellum.NewProxy(a.vellumClient, sshClient, string(arch))
 			runtime.EventsEmit(a.ctx, "install:progress", InstallProgress{
 				Status:  "downloading",
-				Message: "Downloading packages via proxy...",
+				Message: "Downloading packages via reManager...",
 			})
 
 			var err error
@@ -1726,18 +1993,21 @@ func (a *App) GetAppVersion() string {
 
 type SettingsInfo struct {
 	TabVisibility map[string]bool `json:"tabVisibility"`
+	ProxyMode     bool            `json:"proxyMode"`
 }
 
 func (a *App) GetSettings() SettingsInfo {
 	if a.settingsStore == nil {
 		return SettingsInfo{
 			TabVisibility: map[string]bool{"mods": true, "maintenance": true},
+			ProxyMode:     true,
 		}
 	}
 	settings, err := a.settingsStore.Load()
 	if err != nil {
 		return SettingsInfo{
 			TabVisibility: map[string]bool{"mods": true, "maintenance": true},
+			ProxyMode:     true,
 		}
 	}
 	return SettingsInfo{
@@ -1745,10 +2015,11 @@ func (a *App) GetSettings() SettingsInfo {
 			"mods":        settings.TabVisibility.Mods,
 			"maintenance": settings.TabVisibility.Maintenance,
 		},
+		ProxyMode: settings.ProxyMode,
 	}
 }
 
-func (a *App) SaveSettings(tabVisibility map[string]bool) error {
+func (a *App) SaveSettings(tabVisibility map[string]bool, proxyMode bool) error {
 	if a.settingsStore == nil {
 		return fmt.Errorf("settings store not initialized")
 	}
@@ -1757,6 +2028,7 @@ func (a *App) SaveSettings(tabVisibility map[string]bool) error {
 			Mods:        tabVisibility["mods"],
 			Maintenance: tabVisibility["maintenance"],
 		},
+		ProxyMode: proxyMode,
 	}
 	return a.settingsStore.Save(settings)
 }

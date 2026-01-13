@@ -28,6 +28,9 @@ interface PackageDetailPanelProps {
   queueType: 'install' | 'uninstall' | null
   disabled: boolean
   onSelectPackage: (name: string) => void
+  firmware?: string
+  conflict?: string | null
+  isOsCompatible?: boolean
 }
 
 const deviceLabels: Record<string, string> = {
@@ -47,6 +50,9 @@ export function PackageDetailPanel({
   queueType,
   disabled,
   onSelectPackage,
+  firmware,
+  conflict,
+  isOsCompatible = true,
 }: PackageDetailPanelProps) {
   const formatOsRange = () => {
     if (!pkg.osMin && !pkg.osMax) return null
@@ -217,6 +223,16 @@ export function PackageDetailPanel({
           >
             <Trash2 className="h-4 w-4 mr-2" />
             Remove
+          </Button>
+        ) : !isOsCompatible ? (
+          <Button className="w-full" disabled>
+            <AlertTriangle className="h-4 w-4 mr-2" />
+            Not compatible with {firmware}
+          </Button>
+        ) : conflict ? (
+          <Button className="w-full" disabled>
+            <AlertTriangle className="h-4 w-4 mr-2" />
+            {conflict}
           </Button>
         ) : (
           <Button className="w-full" onClick={onInstall} disabled={disabled}>

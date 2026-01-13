@@ -66,7 +66,7 @@ func (p *Proxy) ProxyDownload(packages []string, onProgress func(string)) ([]str
 	// 2. Upload APKINDEX to device cache
 	apkindexCacheName := computeAPKINDEXCacheName(apkindexURL)
 	remotePath := fmt.Sprintf("%s/%s", VellumCacheDir, apkindexCacheName)
-	onProgress(fmt.Sprintf("Uploading %s...", apkindexCacheName))
+	onProgress(fmt.Sprintf("Transferring %s...", apkindexCacheName))
 
 	if err := p.uploadToDevice(apkindexData, remotePath); err != nil {
 		return nil, fmt.Errorf("failed to upload APKINDEX: %w", err)
@@ -121,7 +121,7 @@ func (p *Proxy) ProxyDownload(packages []string, onProgress func(string)) ([]str
 
 		// Upload to device cache
 		remotePath := fmt.Sprintf("%s/%s", VellumCacheDir, cacheFilename)
-		onProgress(fmt.Sprintf("Uploading %s...", cacheFilename))
+		onProgress(fmt.Sprintf("Transferring %s...", cacheFilename))
 
 		if err := p.uploadToDevice(pkgData, remotePath); err != nil {
 			return nil, fmt.Errorf("failed to upload %s: %w", pkgName, err)
@@ -212,6 +212,28 @@ func parseAPKINDEX(data []byte) (map[string]string, error) {
 	}
 
 	return checksums, nil
+}
+
+// UploadAPKINDEX downloads the APKINDEX and uploads it to device cache.
+// This should be called before vellum update to ensure the index is available.
+func (p *Proxy) UploadAPKINDEX(onProgress func(string)) error {
+	onProgress("Downloading package index...")
+
+	apkindexURL := fmt.Sprintf("%s/%s/APKINDEX.tar.gz", VellumRepoBaseURL, p.arch)
+	apkindexData, err := downloadFile(apkindexURL)
+	if err != nil {
+		return fmt.Errorf("failed to download APKINDEX: %w", err)
+	}
+
+	apkindexCacheName := computeAPKINDEXCacheName(apkindexURL)
+	remotePath := fmt.Sprintf("%s/%s", VellumCacheDir, apkindexCacheName)
+	onProgress(fmt.Sprintf("Transferring %s...", apkindexCacheName))
+
+	if err := p.uploadToDevice(apkindexData, remotePath); err != nil {
+		return fmt.Errorf("failed to upload APKINDEX: %w", err)
+	}
+
+	return nil
 }
 
 // computeAPKINDEXCacheName returns the cache filename for APKINDEX

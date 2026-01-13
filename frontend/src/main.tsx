@@ -1,4 +1,3 @@
-import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App'
 import './index.css'
@@ -12,8 +11,4 @@ window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e)
   document.documentElement.classList.toggle('dark', e.matches)
 })
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>,
-)
+ReactDOM.createRoot(document.getElementById('root')!).render(<App />)
