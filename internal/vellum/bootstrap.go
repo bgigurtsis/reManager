@@ -76,10 +76,10 @@ func getLatestVellumRelease(majorVersion int) (*GitHubRelease, error) {
 			continue
 		}
 
-		major, _ := strconv.Atoi(matches[1])
-		if major != majorVersion {
-			continue
-		}
+		// major, _ := strconv.Atoi(matches[1])
+		// if major != majorVersion {
+		// 	continue
+		// }
 
 		minor, _ := strconv.Atoi(matches[2])
 		patch, _ := strconv.Atoi(matches[3])

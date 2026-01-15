@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -44,6 +45,7 @@ type App struct {
 	reconnecting      bool
 	reconnectMu       sync.Mutex
 	fastDialMode      bool
+	installCancelCh   chan struct{}
 }
 
 func NewApp() *App {
@@ -1280,6 +1282,43 @@ func (a *App) RunReenable() {
 	}
 }
 
+func (a *App) SimulatePackageUpgrade() (map[string]interface{}, error) {
+	if a.vellumClient == nil {
+		return nil, fmt.Errorf("not connected")
+	}
+	result, err := a.vellumClient.SimulateUpgrade()
+	if err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{
+		"packages":    result.Packages,
+		"hasUpgrades": result.HasUpgrades,
+	}, nil
+}
+
+func (a *App) RunPackageUpgrade() {
+	if a.vellumClient == nil {
+		return
+	}
+
+	go func() {
+		runtime.EventsEmit(a.ctx, "terminal:clear")
+		runtime.EventsEmit(a.ctx, "terminal:output", "Running vellum upgrade...\n")
+
+		err := a.vellumClient.UpgradeStreaming(func(line string) {
+			runtime.EventsEmit(a.ctx, "terminal:output", line+"\n")
+		})
+
+		success := err == nil
+		if success {
+			runtime.EventsEmit(a.ctx, "terminal:output", "\nPackage upgrade completed.\n")
+		} else {
+			runtime.EventsEmit(a.ctx, "terminal:output", fmt.Sprintf("\nUpgrade error: %v\n", err))
+		}
+		runtime.EventsEmit(a.ctx, "package-upgrade:complete", success)
+	}()
+}
+
 type OSVersionStateResult struct {
 	CurrentVersion string `json:"currentVersion"`
 	StoredVersion  string `json:"storedVersion"`
@@ -1613,8 +1652,39 @@ func (a *App) RespondToDialog(confirmed bool) {
 	}
 }
 
+func (a *App) CancelInstallation() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.installCancelCh != nil {
+		close(a.installCancelCh)
+		a.installCancelCh = nil
+	}
+}
+
 func (a *App) InstallPackages(packageNames []string, deviceType string) {
 	go func() {
+		a.mu.Lock()
+		a.installCancelCh = make(chan struct{})
+		cancelCh := a.installCancelCh
+		a.mu.Unlock()
+
+		defer func() {
+			a.mu.Lock()
+			if a.installCancelCh == cancelCh {
+				a.installCancelCh = nil
+			}
+			a.mu.Unlock()
+		}()
+
+		isCancelled := func() bool {
+			select {
+			case <-cancelCh:
+				return true
+			default:
+				return false
+			}
+		}
+
 		a.dialogResponse = make(chan bool, 1)
 		defer func() {
 			close(a.dialogResponse)
@@ -1646,10 +1716,13 @@ func (a *App) InstallPackages(packageNames []string, deviceType string) {
 			})
 
 			var err error
-			allPackages, err = proxy.ProxyDownload(packageNames, func(msg string) {
+			allPackages, err = proxy.ProxyDownloadWithProgress(packageNames, func(progress vellum.ProxyProgress) {
 				runtime.EventsEmit(a.ctx, "install:progress", InstallProgress{
-					Status:  "downloading",
-					Message: msg,
+					Component: progress.Package,
+					Index:     progress.Current - 1,
+					Total:     progress.Total,
+					Status:    progress.Phase,
+					Message:   progress.Message,
 				})
 			})
 			if err != nil {
@@ -1661,6 +1734,14 @@ func (a *App) InstallPackages(packageNames []string, deviceType string) {
 			}
 		} else {
 			allPackages = packageNames
+		}
+
+		if isCancelled() {
+			runtime.EventsEmit(a.ctx, "install:complete", InstallResult{
+				Success: false,
+				Errors:  []string{"Installation cancelled"},
+			})
+			return
 		}
 
 		exec := &wailsExecutor{app: a}
@@ -1715,6 +1796,28 @@ func (a *App) InstallPackages(packageNames []string, deviceType string) {
 
 func (a *App) UninstallPackages(packageNames []string, deviceType string) {
 	go func() {
+		a.mu.Lock()
+		a.installCancelCh = make(chan struct{})
+		cancelCh := a.installCancelCh
+		a.mu.Unlock()
+
+		defer func() {
+			a.mu.Lock()
+			if a.installCancelCh == cancelCh {
+				a.installCancelCh = nil
+			}
+			a.mu.Unlock()
+		}()
+
+		isCancelled := func() bool {
+			select {
+			case <-cancelCh:
+				return true
+			default:
+				return false
+			}
+		}
+
 		a.dialogResponse = make(chan bool, 1)
 		defer func() {
 			close(a.dialogResponse)
@@ -1769,6 +1872,14 @@ func (a *App) UninstallPackages(packageNames []string, deviceType string) {
 			}
 		} else {
 			allPackages = packageNames
+		}
+
+		if isCancelled() {
+			runtime.EventsEmit(a.ctx, "install:complete", InstallResult{
+				Success: false,
+				Errors:  []string{"Uninstall cancelled"},
+			})
+			return
 		}
 
 		exec := &wailsExecutor{app: a}
@@ -1978,12 +2089,51 @@ func (e *wailsExecutor) ExecuteWithOutput(cmd string) (string, error) {
 }
 
 func (e *wailsExecutor) ExecuteStreaming(cmd string, onOutput func(line string)) error {
-	output, err := e.ExecuteWithOutput(cmd)
-	if onOutput != nil && output != "" {
-		for _, line := range strings.Split(output, "\n") {
-			onOutput(line)
+	e.app.mu.Lock()
+	if e.app.client == nil {
+		e.app.mu.Unlock()
+		return fmt.Errorf("not connected")
+	}
+
+	session, err := e.app.client.NewSession()
+	if err != nil {
+		e.app.mu.Unlock()
+		return err
+	}
+	e.app.mu.Unlock()
+	defer session.Close()
+
+	stdout, err := session.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	stderr, err := session.StderrPipe()
+	if err != nil {
+		return err
+	}
+
+	if err := session.Start(cmd); err != nil {
+		return err
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	readLines := func(r io.Reader) {
+		defer wg.Done()
+		scanner := bufio.NewScanner(r)
+		for scanner.Scan() {
+			if onOutput != nil {
+				onOutput(scanner.Text())
+			}
 		}
 	}
+
+	go readLines(stdout)
+	go readLines(stderr)
+
+	err = session.Wait()
+	wg.Wait()
 	return err
 }
 

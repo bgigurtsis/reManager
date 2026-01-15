@@ -11,6 +11,8 @@ interface ProgressModalProps {
   terminalOutput: string
   isComplete: boolean
   onClose: () => void
+  canStop?: boolean
+  onStop?: () => void
 }
 
 export function ProgressModal({
@@ -20,6 +22,8 @@ export function ProgressModal({
   terminalOutput,
   isComplete,
   onClose,
+  canStop,
+  onStop,
 }: ProgressModalProps) {
   return (
     <>
@@ -37,7 +41,11 @@ export function ProgressModal({
         </div>
       </div>
       <DialogFooter>
-        <Button onClick={onClose} className={isComplete ? '' : 'invisible'}>Close</Button>
+        {isComplete ? (
+          <Button onClick={onClose}>Close</Button>
+        ) : canStop ? (
+          <Button onClick={onStop} variant="destructive">Stop</Button>
+        ) : null}
       </DialogFooter>
     </>
   )

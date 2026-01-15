@@ -45,90 +45,149 @@ func NewProxy(client *Client, sshClient *ssh.Client, arch string) *Proxy {
 	}
 }
 
+type ProxyProgress struct {
+	Phase   string // "index", "resolving", "downloading", "transferring", "complete"
+	Current int
+	Total   int
+	Package string
+	Message string
+}
+
+// ProxyDownloadWithProgress downloads packages with structured progress reporting.
+func (p *Proxy) ProxyDownloadWithProgress(packages []string, onProgress func(ProxyProgress)) ([]string, error) {
+	return p.proxyDownloadInternal(packages, onProgress)
+}
+
 // ProxyDownload downloads APKINDEX and packages, uploads them to device cache.
 // Returns the list of all package names that will be installed (including dependencies).
 func (p *Proxy) ProxyDownload(packages []string, onProgress func(string)) ([]string, error) {
-	onProgress("Downloading package index...")
+	return p.proxyDownloadInternal(packages, func(progress ProxyProgress) {
+		onProgress(progress.Message)
+	})
+}
+
+func (p *Proxy) proxyDownloadInternal(packages []string, onProgress func(ProxyProgress)) ([]string, error) {
+	fmt.Printf("[DEBUG] ProxyDownload called with packages: %v\n", packages)
+	onProgress(ProxyProgress{Phase: "index", Message: "Downloading package index..."})
 
 	// 1. Download and parse APKINDEX
 	apkindexURL := fmt.Sprintf("%s/%s/APKINDEX.tar.gz", VellumRepoBaseURL, p.arch)
+	fmt.Printf("[DEBUG] ProxyDownload downloading APKINDEX from: %s\n", apkindexURL)
 	apkindexData, err := downloadFile(apkindexURL)
 	if err != nil {
+		fmt.Printf("[DEBUG] ProxyDownload APKINDEX download failed: %v\n", err)
 		return nil, fmt.Errorf("failed to download APKINDEX: %w", err)
 	}
+	fmt.Printf("[DEBUG] ProxyDownload APKINDEX downloaded, size: %d bytes\n", len(apkindexData))
 
 	// Parse APKINDEX to get C: fields
 	checksums, err := parseAPKINDEX(apkindexData)
 	if err != nil {
+		fmt.Printf("[DEBUG] ProxyDownload APKINDEX parse failed: %v\n", err)
 		return nil, fmt.Errorf("failed to parse APKINDEX: %w", err)
 	}
+	fmt.Printf("[DEBUG] ProxyDownload parsed %d checksums from APKINDEX\n", len(checksums))
 
 	// 2. Upload APKINDEX to device cache
 	apkindexCacheName := computeAPKINDEXCacheName(apkindexURL)
 	remotePath := fmt.Sprintf("%s/%s", VellumCacheDir, apkindexCacheName)
-	onProgress(fmt.Sprintf("Transferring %s...", apkindexCacheName))
+	fmt.Printf("[DEBUG] ProxyDownload uploading APKINDEX to: %s\n", remotePath)
+	onProgress(ProxyProgress{Phase: "index", Message: fmt.Sprintf("Transferring %s...", apkindexCacheName)})
 
 	if err := p.uploadToDevice(apkindexData, remotePath); err != nil {
+		fmt.Printf("[DEBUG] ProxyDownload APKINDEX upload failed: %v\n", err)
 		return nil, fmt.Errorf("failed to upload APKINDEX: %w", err)
 	}
+	fmt.Printf("[DEBUG] ProxyDownload APKINDEX uploaded successfully\n")
 
 	// 3. Simulate to get only packages that will actually be installed
-	onProgress("Resolving dependencies...")
+	onProgress(ProxyProgress{Phase: "resolving", Message: "Resolving dependencies..."})
+	fmt.Printf("[DEBUG] ProxyDownload calling SimulateAdd with: %v\n", packages)
 	toInstall, err := p.client.SimulateAdd(packages...)
 	if err != nil {
+		fmt.Printf("[DEBUG] ProxyDownload SimulateAdd failed: %v\n", err)
 		return nil, fmt.Errorf("failed to simulate install: %w", err)
 	}
+	fmt.Printf("[DEBUG] ProxyDownload SimulateAdd returned %d packages: %v\n", len(toInstall), toInstall)
 
 	// If nothing to install, return early
 	if len(toInstall) == 0 {
-		onProgress("All packages already installed")
+		fmt.Printf("[DEBUG] ProxyDownload: nothing to install, returning early\n")
+		onProgress(ProxyProgress{Phase: "complete", Message: "All packages already installed"})
 		return nil, nil
 	}
 
 	// 4. Get download URLs only for packages that need to be installed
+	fmt.Printf("[DEBUG] ProxyDownload calling FetchURLs with: %v\n", toInstall)
 	urls, err := p.client.FetchURLs(toInstall...)
 	if err != nil {
+		fmt.Printf("[DEBUG] ProxyDownload FetchURLs failed: %v\n", err)
 		return nil, fmt.Errorf("failed to get package URLs: %w", err)
 	}
+	fmt.Printf("[DEBUG] ProxyDownload FetchURLs returned %d URLs: %v\n", len(urls), urls)
 
 	// 5. Download and upload each package
-	for _, url := range urls {
+	fmt.Printf("[DEBUG] ProxyDownload starting package download loop for %d URLs\n", len(urls))
+	for i, url := range urls {
+		fmt.Printf("[DEBUG] ProxyDownload processing URL %d/%d: %s\n", i+1, len(urls), url)
 		// Skip local paths (not https://)
 		if !strings.HasPrefix(url, "https://") {
+			fmt.Printf("[DEBUG] ProxyDownload skipping non-https URL: %s\n", url)
 			continue
 		}
 
 		pkgName, pkgVersion := parsePackageURL(url)
 		if pkgName == "" {
+			fmt.Printf("[DEBUG] ProxyDownload failed to parse URL: %s\n", url)
 			continue
 		}
+		fmt.Printf("[DEBUG] ProxyDownload parsed package: name=%s, version=%s\n", pkgName, pkgVersion)
 
-		onProgress(fmt.Sprintf("Downloading %s-%s...", pkgName, pkgVersion))
+		onProgress(ProxyProgress{
+			Phase:   "downloading",
+			Current: i + 1,
+			Total:   len(urls),
+			Package: pkgName,
+			Message: fmt.Sprintf("Downloading %s (%d/%d)...", pkgName, i+1, len(urls)),
+		})
 
 		// Download the package
 		pkgData, err := downloadFile(url)
 		if err != nil {
+			fmt.Printf("[DEBUG] ProxyDownload download failed for %s: %v\n", pkgName, err)
 			return nil, fmt.Errorf("failed to download %s: %w", pkgName, err)
 		}
+		fmt.Printf("[DEBUG] ProxyDownload downloaded %s, size: %d bytes\n", pkgName, len(pkgData))
 
 		// Compute cache filename
 		cField, ok := checksums[pkgName]
 		if !ok {
+			fmt.Printf("[DEBUG] ProxyDownload checksum not found for: %s (available: %d checksums)\n", pkgName, len(checksums))
 			return nil, fmt.Errorf("checksum not found for package: %s", pkgName)
 		}
 		hash8 := computePackageHash(cField)
 		cacheFilename := fmt.Sprintf("%s-%s.%s.apk", pkgName, pkgVersion, hash8)
+		fmt.Printf("[DEBUG] ProxyDownload computed cache filename: %s (cField=%s, hash8=%s)\n", cacheFilename, cField, hash8)
 
 		// Upload to device cache
 		remotePath := fmt.Sprintf("%s/%s", VellumCacheDir, cacheFilename)
-		onProgress(fmt.Sprintf("Transferring %s...", cacheFilename))
+		onProgress(ProxyProgress{
+			Phase:   "transferring",
+			Current: i + 1,
+			Total:   len(urls),
+			Package: pkgName,
+			Message: fmt.Sprintf("Transferring %s (%d/%d)...", pkgName, i+1, len(urls)),
+		})
 
 		if err := p.uploadToDevice(pkgData, remotePath); err != nil {
+			fmt.Printf("[DEBUG] ProxyDownload upload failed for %s: %v\n", pkgName, err)
 			return nil, fmt.Errorf("failed to upload %s: %w", pkgName, err)
 		}
+		fmt.Printf("[DEBUG] ProxyDownload uploaded %s to %s\n", pkgName, remotePath)
 	}
 
-	onProgress("All packages downloaded and cached")
+	fmt.Printf("[DEBUG] ProxyDownload completed successfully\n")
+	onProgress(ProxyProgress{Phase: "complete", Total: len(urls), Current: len(urls), Message: "All packages downloaded and cached"})
 	return toInstall, nil
 }
 

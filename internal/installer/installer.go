@@ -2,12 +2,25 @@ package installer
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"reManager/internal/component"
 	"reManager/internal/executor"
 	"reManager/internal/vellum"
 )
+
+var installProgressRegex = regexp.MustCompile(`\(\s*(\d+)/(\d+)\)\s+Installing\s+([^\s]+)\s+\(`)
+
+func parseInstallProgress(line string) (idx int, total int, pkgName string) {
+	matches := installProgressRegex.FindStringSubmatch(line)
+	if len(matches) >= 4 {
+		fmt.Sscanf(matches[1], "%d", &idx)
+		fmt.Sscanf(matches[2], "%d", &total)
+		pkgName = matches[3]
+	}
+	return
+}
 
 type InstallResult struct {
 	Success  bool
@@ -43,59 +56,73 @@ func (i *Installer) Install(
 
 	fmt.Printf("[DEBUG] Install starting for packages: %v (all: %v)\n", packageNames, allPackages)
 
-	for idx, pkgName := range packageNames {
-		pkg := i.metadata.GetPackage(pkgName)
-		displayName := pkgName
-		if pkg != nil {
-			displayName = pkg.Name
+	if onProgress != nil {
+		onProgress(executor.ProgressInfo{
+			CurrentComponent: packageNames[0],
+			TotalComponents:  len(packageNames),
+			CurrentIndex:     0,
+			Status:           executor.StatusInstalling,
+			Message:          "Installing packages...",
+		})
+	}
+
+	var lastOutput string
+	var currentPkg string
+	var currentIdx int
+
+	err := i.vellum.AddStreaming(func(line string) {
+		lastOutput = line
+		fmt.Printf("[DEBUG] vellum output: %s\n", line)
+
+		if strings.Contains(line, "DNS:") {
+			dnsError = true
 		}
 
-		fmt.Printf("[DEBUG] Installing package %d/%d: %s\n", idx+1, len(packageNames), pkgName)
-
-		if onProgress != nil {
-			onProgress(executor.ProgressInfo{
-				CurrentComponent: displayName,
-				TotalComponents:  len(packageNames),
-				CurrentIndex:     idx,
-				Status:           executor.StatusInstalling,
-				Message:          fmt.Sprintf("Installing %s...", displayName),
-			})
-		}
-
-		var lastOutput string
-		err := i.vellum.AddStreaming(func(line string) {
-			lastOutput = line
-			fmt.Printf("[DEBUG] vellum output: %s\n", line)
-			if strings.Contains(line, "DNS:") {
-				dnsError = true
-			}
+		if idx, total, pkgName := parseInstallProgress(line); pkgName != "" {
+			currentPkg = pkgName
+			currentIdx = idx - 1
 			if onProgress != nil {
 				onProgress(executor.ProgressInfo{
-					CurrentComponent: displayName,
-					TotalComponents:  len(packageNames),
-					CurrentIndex:     idx,
+					CurrentComponent: pkgName,
+					TotalComponents:  total,
+					CurrentIndex:     currentIdx,
 					Status:           executor.StatusInstalling,
-					Message:          line,
+					Message:          fmt.Sprintf("Installing %s (%d/%d)...", pkgName, idx, total),
 				})
 			}
-		}, pkgName)
-
-		if err != nil {
-			errMsg := fmt.Sprintf("Installation failed for %s: %v (output: %s)", displayName, err, lastOutput)
-			fmt.Printf("[DEBUG] Install error: %s\n", errMsg)
-			errors = append(errors, errMsg)
-			reportError(onProgress, displayName, len(packageNames), idx, errMsg)
-			continue
+		} else if onProgress != nil && currentPkg != "" {
+			onProgress(executor.ProgressInfo{
+				CurrentComponent: currentPkg,
+				TotalComponents:  len(packageNames),
+				CurrentIndex:     currentIdx,
+				Status:           executor.StatusInstalling,
+				Message:          line,
+			})
 		}
-		fmt.Printf("[DEBUG] Package %s installed successfully\n", pkgName)
+	}, packageNames...)
 
+	if err != nil {
+		errMsg := fmt.Sprintf("Installation failed: %v (output: %s)", err, lastOutput)
+		fmt.Printf("[DEBUG] Install error: %s\n", errMsg)
+		errors = append(errors, errMsg)
 		if onProgress != nil {
 			onProgress(executor.ProgressInfo{
-				CurrentComponent: displayName,
+				CurrentComponent: currentPkg,
 				TotalComponents:  len(packageNames),
-				CurrentIndex:     idx,
+				CurrentIndex:     currentIdx,
+				Status:           executor.StatusError,
+				Message:          errMsg,
+			})
+		}
+	} else {
+		fmt.Printf("[DEBUG] All packages installed successfully\n")
+		if onProgress != nil {
+			onProgress(executor.ProgressInfo{
+				CurrentComponent: packageNames[len(packageNames)-1],
+				TotalComponents:  len(packageNames),
+				CurrentIndex:     len(packageNames) - 1,
 				Status:           executor.StatusCompleted,
-				Message:          fmt.Sprintf("%s installed successfully", displayName),
+				Message:          "All packages installed successfully",
 			})
 		}
 	}

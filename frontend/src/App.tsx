@@ -148,6 +148,8 @@ declare global {
           GetInstalledPackages(): Promise<string[]>
           GetInstalledPackagesWithOsCheck(): Promise<InstalledPackagesResult>
           RunReenable(): Promise<void>
+          SimulatePackageUpgrade(): Promise<{ packages: string[]; hasUpgrades: boolean }>
+          RunPackageUpgrade(): Promise<void>
           RunUpgrade(): Promise<void>
           GetPackageCompatibilityStatus(): Promise<{
             installedPackages: string[]
@@ -168,6 +170,7 @@ declare global {
           RunMaintenanceCommand(pkgName: string, commandId: string, deviceType: string): Promise<void>
           RunSystemTask(taskId: string, deviceType: string): Promise<void>
           RespondToDialog(confirmed: boolean): Promise<void>
+          CancelInstallation(): Promise<void>
           GetAppVersion(): Promise<string>
           GetSettings(): Promise<{ tabVisibility: Record<string, boolean>; proxyMode: boolean }>
           SaveSettings(tabVisibility: Record<string, boolean>, proxyMode: boolean): Promise<void>
@@ -205,6 +208,7 @@ export default function App() {
   const [installing, setInstalling] = useState(false)
   const [output, setOutput] = useState('')
   const [currentComponent, setCurrentComponent] = useState('')
+  const [progressStatus, setProgressStatus] = useState('')
   const [showRebuildDialog, setShowRebuildDialog] = useState(false)
   const [dialogRequest, setDialogRequest] = useState<DialogRequest | null>(null)
   const connectAttemptRef = useRef(0)
@@ -235,6 +239,7 @@ export default function App() {
   const [showAutoUpdateBanner, setShowAutoUpdateBanner] = useState(false)
   const [commandContext, setCommandContext] = useState<'install' | 'maintenance' | null>(null)
   const commandContextRef = useRef<'install' | 'maintenance' | null>(null)
+  const manuallyStoppedRef = useRef(false)
 
   const [showSettingsDialog, setShowSettingsDialog] = useState(false)
   const [appVersion, setAppVersion] = useState('dev')
@@ -259,6 +264,10 @@ export default function App() {
   const [maintenanceCommands, setMaintenanceCommands] = useState<Record<string, MaintenanceCommandInfo[]>>({})
 
   const [savedDevices, setSavedDevices] = useState<SavedDevice[]>([])
+  const [deviceSortMode, setDeviceSortMode] = useState<'recent' | 'alpha'>(() => {
+    const saved = localStorage.getItem('deviceSortMode')
+    return saved === 'alpha' ? 'alpha' : 'recent'
+  })
   const [showAddForm, setShowAddForm] = useState(false)
   const [showSaveDeviceDialog, setShowSaveDeviceDialog] = useState(false)
   const [deviceName, setDeviceName] = useState('')
@@ -287,6 +296,9 @@ export default function App() {
   const [prevOsVersion, setPrevOsVersion] = useState('')
   const [newOsVersion, setNewOsVersion] = useState('')
   const [runningReenable, setRunningReenable] = useState(false)
+  const [pendingPackageUpgrade, setPendingPackageUpgrade] = useState<string[] | null>(null)
+  const [simulatingUpgrade, setSimulatingUpgrade] = useState(false)
+  const [showNoUpgradesDialog, setShowNoUpgradesDialog] = useState(false)
 
   // OS mismatch detection state (proactive - at connection time)
   const [osMismatchDetected, setOsMismatchDetected] = useState(false)
@@ -318,6 +330,15 @@ export default function App() {
     const saved = localStorage.getItem('packageViewMode')
     return saved === 'compact' ? 'compact' : 'full'
   })
+
+  const sortedDevices = useMemo(() => {
+    return [...savedDevices].sort((a, b) => {
+      if (deviceSortMode === 'alpha') {
+        return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+      }
+      return (b.lastConnected || 0) - (a.lastConnected || 0)
+    })
+  }, [savedDevices, deviceSortMode])
 
   // Memoized sorted and filtered packages
   const categories = useMemo(() => {
@@ -381,6 +402,10 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('packageViewMode', viewMode)
   }, [viewMode])
+
+  useEffect(() => {
+    localStorage.setItem('deviceSortMode', deviceSortMode)
+  }, [deviceSortMode])
 
   useEffect(() => {
     const loadInitialData = async () => {
@@ -582,13 +607,14 @@ export default function App() {
       const success = args[0] as boolean
       console.log('Received command:done:', success)
       setCommandRunning(false)
-      if (!success) {
+      if (!success && !manuallyStoppedRef.current) {
         if (commandContextRef.current === 'maintenance') {
           setMaintenanceOutput((prev) => prev + '\n[Command failed]\n')
         } else {
           setOutput((prev) => prev + '\n[Command failed]\n')
         }
       }
+      manuallyStoppedRef.current = false
       // Refresh status after maintenance commands
       if (commandContextRef.current === 'maintenance') {
         const [updateStatus, hashtabStatus] = await Promise.all([
@@ -608,15 +634,15 @@ export default function App() {
       const progress = args[0] as InstallProgress
       console.log('Received install:progress:', progress)
       setCurrentComponent(progress.component)
+      setProgressStatus(progress.status)
       setProgressTotal(progress.total)
 
       setProgressIndex(progress.index)
-      if (progress.status === 'completed') {
-        const completedCount = progress.index + 1
-        setProgressPercentage(Math.round((completedCount / progress.total) * 100))
+      if (progress.total > 0 && progress.index >= 0) {
+        setProgressPercentage(Math.round(((progress.index + 1) / progress.total) * 100))
       }
 
-      if (progress.status === 'downloading' || progress.status === 'installing') {
+      if (progress.status === 'downloading' || progress.status === 'transferring' || progress.status === 'installing') {
         if (progress.message) {
           setOutput((prev) => prev + progress.message + '\n')
         }
@@ -668,6 +694,7 @@ export default function App() {
       setUninstalling(false)
       setCommandRunning(false)
       setCurrentComponent('')
+      setProgressStatus('')
       setCommandContext(null)
       setDialogRequest(null)
       setInstallQueue(new Set())
@@ -781,6 +808,16 @@ export default function App() {
       }
     })
 
+    const unsubscribePackageUpgradeComplete = window.runtime.EventsOn('package-upgrade:complete', async (...args: unknown[]) => {
+      const success = args[0] as boolean
+      console.log('Received package-upgrade:complete:', success)
+      setCommandRunning(false)
+      setCommandContext(null)
+      if (success) {
+        await rescanAllPackages()
+      }
+    })
+
     const unsubscribeAutoUpdate = window.runtime.EventsOn('autoupdate:enabled', () => {
       console.log('Received autoupdate:enabled')
       setTimeout(() => setShowAutoUpdateBanner(true), 1000)
@@ -838,6 +875,7 @@ export default function App() {
       unsubscribeUpgradeBlocked()
       unsubscribeUpgradeError()
       unsubscribeUpgradeComplete()
+      unsubscribePackageUpgradeComplete()
       unsubscribeAutoUpdate()
       unsubscribeConnectionLost()
       unsubscribeConnectionReconnecting()
@@ -1166,6 +1204,32 @@ export default function App() {
     setOsUpgradeDetected(false)
   }
 
+  const handleCheckUpgrades = async () => {
+    setSimulatingUpgrade(true)
+    try {
+      const result = await window.go.main.App.SimulatePackageUpgrade()
+      if (result.hasUpgrades) {
+        setPendingPackageUpgrade(result.packages)
+      } else {
+        setShowNoUpgradesDialog(true)
+      }
+    } catch (err) {
+      console.error('Failed to check upgrades:', err)
+    } finally {
+      setSimulatingUpgrade(false)
+    }
+  }
+
+  const confirmPackageUpgrade = async () => {
+    setPendingPackageUpgrade(null)
+    setShowProgressModal(true)
+    setProgressModalType('maintenance')
+    setMaintenanceOutput('')
+    setCommandRunning(true)
+    setCommandContext('maintenance')
+    await window.go.main.App.RunPackageUpgrade()
+  }
+
   const handleHashtabRebuild = async () => {
     setShowProgressModal(true)
     setProgressModalType('maintenance')
@@ -1234,10 +1298,19 @@ export default function App() {
   }
 
   const handleStopCommand = async () => {
+    manuallyStoppedRef.current = true
     await window.go.main.App.StopCommand()
     setCurrentRunningCommand(null)
     setCommandRunning(false)
     setMaintenanceOutput((prev) => prev + '\n=== Command stopped ===\n')
+  }
+
+  const handleCancelInstallation = async () => {
+    await window.go.main.App.CancelInstallation()
+    setInstalling(false)
+    setUninstalling(false)
+    setOutput((prev) => prev + '\n=== Cancelled ===\n')
+    await rescanAllPackages()
   }
 
   const getModalTitle = () => {
@@ -1250,7 +1323,14 @@ export default function App() {
   const getProgressText = () => {
     if (progressModalType === 'install') {
       if (installing || uninstalling) {
-        const action = installing ? 'Installing' : 'Removing'
+        let action: string
+        if (uninstalling) {
+          action = 'Removing'
+        } else if (progressStatus === 'downloading' || progressStatus === 'transferring') {
+          action = 'Downloading'
+        } else {
+          action = 'Installing'
+        }
         return currentComponent
           ? `${action} ${currentComponent} (${progressIndex + 1} of ${progressTotal})`
           : `${action} components...`
@@ -1305,7 +1385,23 @@ export default function App() {
             {/* Show saved devices list OR add form */}
             {savedDevices.length > 0 && !showAddForm ? (
               <div className="space-y-4">
-                {savedDevices.map((savedDevice) => (
+                <div className="flex justify-end">
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setDeviceSortMode(m => m === 'recent' ? 'alpha' : 'recent')}
+                      >
+                        {deviceSortMode === 'recent' ? 'Recent' : 'A-Z'}
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      {deviceSortMode === 'recent' ? 'Sort alphabetically' : 'Sort by recent'}
+                    </TooltipContent>
+                  </Tooltip>
+                </div>
+                {sortedDevices.map((savedDevice) => (
                   <Card key={savedDevice.id}>
                     <CardContent className="pt-6">
                       <div className="flex items-center justify-between">
@@ -1653,7 +1749,7 @@ export default function App() {
                                 const prevQueued = index > 0 && uninstallQueue.has(installedFiltered[index - 1].name)
                                 const nextQueued = index < installedFiltered.length - 1 && uninstallQueue.has(installedFiltered[index + 1].name)
                                 return (
-                                  <div key={pkg.name} className={`py-3 flex items-center gap-4 transition-colors ${isQueued ? `border-l-4 border-destructive ${!prevQueued ? 'border-t' : ''} ${!nextQueued ? 'border-b' : ''}` : index % 2 === 1 ? 'bg-muted/50 hover:bg-muted' : 'hover:bg-muted/70'}`}>
+                                  <div key={pkg.name} className={`py-3 flex items-center gap-4 transition-colors ${isQueued ? `border-l-4 border-destructive pl-3 ${!prevQueued ? 'border-t' : ''} ${!nextQueued ? 'border-b' : ''}` : index % 2 === 1 ? 'bg-muted/50 hover:bg-muted' : 'hover:bg-muted/70'}`}>
                                   <div
                                     className="flex-1 min-w-0 cursor-pointer"
                                     onClick={() => setSelectedPackage(pkg)}
@@ -1724,7 +1820,7 @@ export default function App() {
                                 const nextQueued = index < availableFiltered.length - 1 && installQueue.has(availableFiltered[index + 1].name)
                                 const conflict = getConflict(pkg)
                                 return (
-                                  <div key={pkg.name} className={`py-3 flex items-center gap-4 transition-colors ${isQueued ? `border-l-4 border-primary ${!prevQueued ? 'border-t' : ''} ${!nextQueued ? 'border-b' : ''}` : index % 2 === 1 ? 'bg-muted/50 hover:bg-muted' : 'hover:bg-muted/70'}`}>
+                                  <div key={pkg.name} className={`py-3 flex items-center gap-4 transition-colors ${isQueued ? `border-l-4 border-primary pl-3 ${!prevQueued ? 'border-t' : ''} ${!nextQueued ? 'border-b' : ''}` : index % 2 === 1 ? 'bg-muted/50 hover:bg-muted' : 'hover:bg-muted/70'}`}>
                                   <div
                                     className="flex-1 min-w-0 cursor-pointer"
                                     onClick={() => setSelectedPackage(pkg)}
@@ -2059,6 +2155,20 @@ export default function App() {
                             </TooltipTrigger>
                             <TooltipContent>Reenable packages that modify the system partition</TooltipContent>
                           </Tooltip>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                onClick={handleCheckUpgrades}
+                                disabled={commandRunning || simulatingUpgrade || connectionStatus !== 'connected'}
+                                variant="outline"
+                                size="sm"
+                                className="flex-1"
+                              >
+                                {simulatingUpgrade ? 'Checking...' : 'Upgrade'}
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>Check for and install package updates</TooltipContent>
+                          </Tooltip>
                         </div>
                       </div>
 
@@ -2098,15 +2208,6 @@ export default function App() {
                                           <TooltipContent>{cmd.description}</TooltipContent>
                                         )}
                                       </Tooltip>
-                                      {isRunning && cmd.allowStop && (
-                                        <Button
-                                          onClick={handleStopCommand}
-                                          variant="destructive"
-                                          size="sm"
-                                        >
-                                          Stop
-                                        </Button>
-                                      )}
                                     </div>
                                   )
                                 })}
@@ -2157,6 +2258,48 @@ export default function App() {
             <Button variant="destructive" onClick={() => confirmUninstallWithDependents(true)}>
               Remove All ({(pendingUninstall?.componentIds.length || 0) + (pendingUninstall?.dependents.length || 0)})
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Package Upgrade Confirmation Dialog */}
+      <Dialog open={pendingPackageUpgrade !== null} onOpenChange={(open) => !open && setPendingPackageUpgrade(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Upgrade Packages</DialogTitle>
+            <DialogDescription>
+              The following {pendingPackageUpgrade?.length} package{pendingPackageUpgrade?.length !== 1 ? 's' : ''} will be upgraded:
+            </DialogDescription>
+          </DialogHeader>
+          <div className="max-h-[40vh] overflow-y-auto">
+            <ul className="list-disc list-inside space-y-1 text-sm">
+              {pendingPackageUpgrade?.sort().map((pkg) => (
+                <li key={pkg}>{pkg}</li>
+              ))}
+            </ul>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPendingPackageUpgrade(null)}>
+              Cancel
+            </Button>
+            <Button onClick={confirmPackageUpgrade}>
+              Upgrade ({pendingPackageUpgrade?.length})
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* No Updates Available Dialog */}
+      <Dialog open={showNoUpgradesDialog} onOpenChange={setShowNoUpgradesDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>No Updates Available</DialogTitle>
+            <DialogDescription>
+              All packages are up to date.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button onClick={() => setShowNoUpgradesDialog(false)}>OK</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -2400,6 +2543,8 @@ export default function App() {
                 setLastInstallSuccess(null)
                 setLastOperationType(null)
               }}
+              canStop={(installing || uninstalling) || currentRunningCommand !== null}
+              onStop={(installing || uninstalling) ? handleCancelInstallation : handleStopCommand}
             />
           )}
         </DialogContent>

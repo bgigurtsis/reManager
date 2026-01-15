@@ -55,7 +55,7 @@ export function UpgradeChecklist({
             {autoUpdatesEnabled && (
               <li>• Auto-updates are enabled</li>
             )}
-            <li>• Run Reenable to restore system modifications</li>
+            <li>• Run Vellum Reenable to restore system modifications</li>
             {hashtabMismatch && (
               <li>• Rebuild hashtable after OS upgrade</li>
             )}

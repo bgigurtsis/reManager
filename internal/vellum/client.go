@@ -184,13 +184,13 @@ func (c *Client) CheckOSCompatibility(targetOS string) (*CompatibilityResult, er
 
 	for _, line := range strings.Split(output, "\n") {
 		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "✓") || strings.HasPrefix(trimmed, "[OK]") {
-			pkg := strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(trimmed, "✓"), "[OK]"))
+		if strings.HasPrefix(trimmed, "✓") || strings.HasPrefix(trimmed, "[OK]") || strings.HasPrefix(trimmed, "+") {
+			pkg := strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(strings.TrimPrefix(trimmed, "✓"), "[OK]"), "+"))
 			if pkg != "" {
 				result.Compatible = append(result.Compatible, pkg)
 			}
-		} else if strings.HasPrefix(trimmed, "✗") || strings.HasPrefix(trimmed, "[FAIL]") {
-			pkg := strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(trimmed, "✗"), "[FAIL]"))
+		} else if strings.HasPrefix(trimmed, "✗") || strings.HasPrefix(trimmed, "[FAIL]") || strings.HasPrefix(trimmed, "x ") {
+			pkg := strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(strings.TrimPrefix(trimmed, "✗"), "[FAIL]"), "x"))
 			if pkg != "" {
 				result.Incompatible = append(result.Incompatible, pkg)
 			}
@@ -213,6 +213,37 @@ func (c *Client) CheckOSCompatibility(targetOS string) (*CompatibilityResult, er
 func (c *Client) UpgradeStreaming(onOutput func(line string)) error {
 	cmd := fmt.Sprintf("%s upgrade", VellumBin)
 	return c.executor.ExecuteStreaming(cmd, onOutput)
+}
+
+type UpgradeSimulationResult struct {
+	Packages    []string
+	HasUpgrades bool
+}
+
+func (c *Client) SimulateUpgrade() (*UpgradeSimulationResult, error) {
+	cmd := fmt.Sprintf("%s upgrade --simulate", VellumBin)
+	output, err := c.executor.ExecuteWithOutput(cmd)
+	if err != nil {
+		return &UpgradeSimulationResult{}, nil
+	}
+	packages := parseUpgradeSimulationOutput(output)
+	return &UpgradeSimulationResult{
+		Packages:    packages,
+		HasUpgrades: len(packages) > 0,
+	}, nil
+}
+
+var upgradeLineRegex = regexp.MustCompile(`\(\s*\d+/\d+\)\s+Upgrading\s+([^\s]+)\s+\(`)
+
+func parseUpgradeSimulationOutput(output string) []string {
+	var packages []string
+	for _, line := range strings.Split(output, "\n") {
+		matches := upgradeLineRegex.FindStringSubmatch(line)
+		if len(matches) >= 2 {
+			packages = append(packages, matches[1])
+		}
+	}
+	return packages
 }
 
 func (c *Client) IsPackageInstalled(pkg string) (bool, error) {
