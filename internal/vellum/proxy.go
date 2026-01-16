@@ -70,7 +70,6 @@ func (p *Proxy) proxyDownloadInternal(packages []string, onProgress func(ProxyPr
 	fmt.Printf("[DEBUG] ProxyDownload called with packages: %v\n", packages)
 	onProgress(ProxyProgress{Phase: "index", Message: "Downloading package index..."})
 
-	// 1. Download and parse APKINDEX
 	apkindexURL := fmt.Sprintf("%s/%s/APKINDEX.tar.gz", VellumRepoBaseURL, p.arch)
 	fmt.Printf("[DEBUG] ProxyDownload downloading APKINDEX from: %s\n", apkindexURL)
 	apkindexData, err := downloadFile(apkindexURL)
@@ -88,7 +87,6 @@ func (p *Proxy) proxyDownloadInternal(packages []string, onProgress func(ProxyPr
 	}
 	fmt.Printf("[DEBUG] ProxyDownload parsed %d checksums from APKINDEX\n", len(checksums))
 
-	// 2. Upload APKINDEX to device cache
 	apkindexCacheName := computeAPKINDEXCacheName(apkindexURL)
 	remotePath := fmt.Sprintf("%s/%s", VellumCacheDir, apkindexCacheName)
 	fmt.Printf("[DEBUG] ProxyDownload uploading APKINDEX to: %s\n", remotePath)
@@ -100,7 +98,6 @@ func (p *Proxy) proxyDownloadInternal(packages []string, onProgress func(ProxyPr
 	}
 	fmt.Printf("[DEBUG] ProxyDownload APKINDEX uploaded successfully\n")
 
-	// 3. Simulate to get only packages that will actually be installed
 	onProgress(ProxyProgress{Phase: "resolving", Message: "Resolving dependencies..."})
 	fmt.Printf("[DEBUG] ProxyDownload calling SimulateAdd with: %v\n", packages)
 	toInstall, err := p.client.SimulateAdd(packages...)
@@ -110,14 +107,12 @@ func (p *Proxy) proxyDownloadInternal(packages []string, onProgress func(ProxyPr
 	}
 	fmt.Printf("[DEBUG] ProxyDownload SimulateAdd returned %d packages: %v\n", len(toInstall), toInstall)
 
-	// If nothing to install, return early
 	if len(toInstall) == 0 {
 		fmt.Printf("[DEBUG] ProxyDownload: nothing to install, returning early\n")
 		onProgress(ProxyProgress{Phase: "complete", Message: "All packages already installed"})
 		return nil, nil
 	}
 
-	// 4. Get download URLs only for packages that need to be installed
 	fmt.Printf("[DEBUG] ProxyDownload calling FetchURLs with: %v\n", toInstall)
 	urls, err := p.client.FetchURLs(toInstall...)
 	if err != nil {
@@ -126,7 +121,6 @@ func (p *Proxy) proxyDownloadInternal(packages []string, onProgress func(ProxyPr
 	}
 	fmt.Printf("[DEBUG] ProxyDownload FetchURLs returned %d URLs: %v\n", len(urls), urls)
 
-	// 5. Download and upload each package
 	fmt.Printf("[DEBUG] ProxyDownload starting package download loop for %d URLs\n", len(urls))
 	for i, url := range urls {
 		fmt.Printf("[DEBUG] ProxyDownload processing URL %d/%d: %s\n", i+1, len(urls), url)
@@ -151,7 +145,6 @@ func (p *Proxy) proxyDownloadInternal(packages []string, onProgress func(ProxyPr
 			Message: fmt.Sprintf("Downloading %s (%d/%d)...", pkgName, i+1, len(urls)),
 		})
 
-		// Download the package
 		pkgData, err := downloadFile(url)
 		if err != nil {
 			fmt.Printf("[DEBUG] ProxyDownload download failed for %s: %v\n", pkgName, err)
@@ -159,7 +152,6 @@ func (p *Proxy) proxyDownloadInternal(packages []string, onProgress func(ProxyPr
 		}
 		fmt.Printf("[DEBUG] ProxyDownload downloaded %s, size: %d bytes\n", pkgName, len(pkgData))
 
-		// Compute cache filename
 		cField, ok := checksums[pkgName]
 		if !ok {
 			fmt.Printf("[DEBUG] ProxyDownload checksum not found for: %s (available: %d checksums)\n", pkgName, len(checksums))
@@ -169,7 +161,6 @@ func (p *Proxy) proxyDownloadInternal(packages []string, onProgress func(ProxyPr
 		cacheFilename := fmt.Sprintf("%s-%s.%s.apk", pkgName, pkgVersion, hash8)
 		fmt.Printf("[DEBUG] ProxyDownload computed cache filename: %s (cField=%s, hash8=%s)\n", cacheFilename, cField, hash8)
 
-		// Upload to device cache
 		remotePath := fmt.Sprintf("%s/%s", VellumCacheDir, cacheFilename)
 		onProgress(ProxyProgress{
 			Phase:   "transferring",
@@ -248,7 +239,6 @@ func parseAPKINDEX(data []byte) (map[string]string, error) {
 			continue
 		}
 
-		// Parse the APKINDEX file
 		scanner := bufio.NewScanner(tr)
 		var currentC string
 		for scanner.Scan() {
@@ -306,28 +296,23 @@ func computeAPKINDEXCacheName(url string) string {
 // computePackageHash computes the 8-char hash from C: field
 // C: field format: Q1{base64} where base64 is SHA1 of package content
 func computePackageHash(cField string) string {
-	// Strip Q1 prefix
 	if strings.HasPrefix(cField, "Q1") {
 		cField = cField[2:]
 	}
 
-	// Base64 decode
 	decoded, err := base64.StdEncoding.DecodeString(cField)
 	if err != nil {
 		return ""
 	}
 
-	// Hex encode and take first 8 chars
 	return hex.EncodeToString(decoded)[:8]
 }
 
 // parsePackageURL extracts package name and version from URL
 // URL format: https://packages.vellum.delivery/aarch64/pkg-name-1.0.0-r0.apk
 func parsePackageURL(url string) (name, version string) {
-	// Get filename from URL
 	filename := path.Base(url)
 
-	// Remove .apk extension
 	if !strings.HasSuffix(filename, ".apk") {
 		return "", ""
 	}

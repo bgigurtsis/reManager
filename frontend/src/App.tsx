@@ -291,7 +291,6 @@ export default function App() {
   const [simulatingInstall, setSimulatingInstall] = useState(false)
   const [simulatingUninstall, setSimulatingUninstall] = useState(false)
 
-  // OS upgrade detection state (reactive - from vellum list)
   const [osUpgradeDetected, setOsUpgradeDetected] = useState(false)
   const [prevOsVersion, setPrevOsVersion] = useState('')
   const [newOsVersion, setNewOsVersion] = useState('')
@@ -300,7 +299,6 @@ export default function App() {
   const [simulatingUpgrade, setSimulatingUpgrade] = useState(false)
   const [showNoUpgradesDialog, setShowNoUpgradesDialog] = useState(false)
 
-  // OS mismatch detection state (proactive - at connection time)
   const [osMismatchDetected, setOsMismatchDetected] = useState(false)
   const [storedOsVersion, setStoredOsVersion] = useState('')
   const [currentOsVersion, setCurrentOsVersion] = useState('')
@@ -314,16 +312,13 @@ export default function App() {
     fetchFailed: boolean
   } | null>(null)
 
-  // Hashtab version mismatch state
   const [hashtabMismatch, setHashtabMismatch] = useState<HashtabVersionStatus | null>(null)
 
-  // Connection status state
   const [connectionStatus, setConnectionStatus] = useState<'connected' | 'lost' | 'reconnecting' | 'failed'>('connected')
   const [reconnectAttempt, setReconnectAttempt] = useState(0)
   const [reconnectMaxAttempts, setReconnectMaxAttempts] = useState(0)
   const [connectionError, setConnectionError] = useState<string | null>(null)
 
-  // Filter state for mod list
   const [search, setSearch] = useState('')
   const [categoryFilter, setCategoryFilter] = useState('all')
   const [viewMode, setViewMode] = useState<'full' | 'compact'>(() => {
@@ -340,7 +335,6 @@ export default function App() {
     })
   }, [savedDevices, deviceSortMode])
 
-  // Memoized sorted and filtered packages
   const categories = useMemo(() => {
     const cats = new Set(packages.flatMap(p => p.categories || []))
     return Array.from(cats).sort()

@@ -64,9 +64,7 @@ export function Terminal({ output }: TerminalProps) {
     requestAnimationFrame(() => {
       try {
         fitAddon.fit()
-      } catch {
-        // Terminal not ready yet, ignore
-      }
+      } catch {}
     })
 
     xtermRef.current = term
@@ -75,9 +73,7 @@ export function Terminal({ output }: TerminalProps) {
     const handleResize = () => {
       try {
         fitAddon.fit()
-      } catch {
-        // Terminal not ready, ignore
-      }
+      } catch {}
     }
     window.addEventListener('resize', handleResize)
 
