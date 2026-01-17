@@ -1775,6 +1775,10 @@ func (a *App) InstallPackages(packageNames []string, deviceType string) {
 						return fmt.Errorf("user cancelled")
 					}
 
+					runtime.EventsEmit(a.ctx, "hook:started", map[string]string{
+						"title": hookResult.DialogConfig.Title,
+					})
+
 					if hookResult.Command != nil {
 						runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("$ %s\n", hookResult.Command.Script))
 						if err := exec.Execute([]component.CommandResult{*hookResult.Command}); err != nil {

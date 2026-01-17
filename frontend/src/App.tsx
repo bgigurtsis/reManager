@@ -211,6 +211,7 @@ export default function App() {
   const [progressStatus, setProgressStatus] = useState('')
   const [showRebuildDialog, setShowRebuildDialog] = useState(false)
   const [dialogRequest, setDialogRequest] = useState<DialogRequest | null>(null)
+  const [runningHookTitle, setRunningHookTitle] = useState<string | null>(null)
   const connectAttemptRef = useRef(0)
 
   const [activeTab, setActiveTab] = useState<'mods' | 'maintenance'>('mods')
@@ -691,6 +692,7 @@ export default function App() {
       setProgressStatus('')
       setCommandContext(null)
       setDialogRequest(null)
+      setRunningHookTitle(null)
       setInstallQueue(new Set())
     })
 
@@ -699,6 +701,11 @@ export default function App() {
       console.log('Received hook:dialog:', dialog)
       setDialogRequest(dialog)
       setShowRebuildDialog(true)
+    })
+
+    const unsubscribeHookStarted = window.runtime.EventsOn('hook:started', (...args: unknown[]) => {
+      const data = args[0] as { title: string }
+      setRunningHookTitle(data.title)
     })
 
     const unsubscribeBootstrapPrompt = window.runtime.EventsOn('vellum:bootstrap-prompt', () => {
@@ -854,6 +861,7 @@ export default function App() {
       unsubscribeProgress()
       unsubscribeComplete()
       unsubscribeDialog()
+      unsubscribeHookStarted()
       unsubscribeBootstrapPrompt()
       unsubscribeBootstrapStart()
       unsubscribeBootstrapOutput()
@@ -1316,6 +1324,9 @@ export default function App() {
 
   const getProgressText = () => {
     if (progressModalType === 'install') {
+      if (runningHookTitle) {
+        return `${runningHookTitle}...`
+      }
       if (installing || uninstalling) {
         let action: string
         if (uninstalling) {
