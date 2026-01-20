@@ -19,7 +19,7 @@ import { DnsErrorModal } from '@/components/DnsErrorModal'
 import { TimezoneCombobox } from '@/components/TimezoneCombobox'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { Badge } from '@/components/ui/badge'
-import { Loader2, Unplug, Check, AlertTriangle, Trash2, Plus, X, Search, Settings, WifiOff } from 'lucide-react'
+import { Loader2, Unplug, Check, AlertTriangle, Trash2, Plus, X, Search, Settings, WifiOff, Eye, EyeOff } from 'lucide-react'
 
 interface PackageInfo {
   name: string
@@ -203,6 +203,8 @@ export default function App() {
   const [host, setHost] = useState('10.11.99.1')
   const [authType, setAuthType] = useState<'password' | 'key'>('password')
   const [password, setPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
+  const [showKeyPassphrase, setShowKeyPassphrase] = useState(false)
   const [availableKeys, setAvailableKeys] = useState<SSHKey[]>([])
   const [selectedKey, setSelectedKey] = useState<string>('')
   const [customKeyName, setCustomKeyName] = useState<string>('')
@@ -284,6 +286,7 @@ export default function App() {
   })
   const [showAddForm, setShowAddForm] = useState(false)
   const [showSaveDeviceDialog, setShowSaveDeviceDialog] = useState(false)
+  const [saveDeviceError, setSaveDeviceError] = useState('')
   const [deviceName, setDeviceName] = useState('')
   const [deviceToDelete, setDeviceToDelete] = useState<string | null>(null)
   const [editingDevice, setEditingDevice] = useState<SavedDevice | null>(null)
@@ -1104,6 +1107,7 @@ export default function App() {
   }
 
   const handleSaveDevice = async () => {
+    setSaveDeviceError('')
     try {
       const pw = authType === 'password' ? password : ''
       const kp = authType === 'key' ? selectedKey : ''
@@ -1116,7 +1120,14 @@ export default function App() {
 
       setShowSaveDeviceDialog(false)
     } catch (err) {
-      console.error('Failed to save device:', err)
+      const errorMsg = String(err)
+      if (errorMsg.includes('failed to store password') || errorMsg.includes('failed to store key passphrase')) {
+        setSaveDeviceError('Device saved, but password could not be stored in system keyring. You may need to re-enter it on next connection.')
+        const devices = await window.go.main.App.GetSavedDevices()
+        setSavedDevices(devices || [])
+      } else {
+        setSaveDeviceError(`Failed to save device: ${errorMsg}`)
+      }
     }
   }
 
@@ -1153,6 +1164,9 @@ export default function App() {
     setConnectionStatus('connected')
     setConnectionError(null)
     setReconnectAttempt(0)
+
+    const devices = await window.go.main.App.GetSavedDevices()
+    setSavedDevices(devices || [])
   }
 
   const handleSaveSettings = async (newTabVisibility: Record<string, boolean>, newProxyMode: boolean) => {
@@ -1656,6 +1670,12 @@ export default function App() {
                       id="host"
                       value={host}
                       onChange={(e) => setHost(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !connecting) {
+                          const canConnect = authType === 'password' ? !!password : (!!selectedKey && selectedKey !== '__other__')
+                          if (canConnect) handleConnect(true)
+                        }
+                      }}
                       placeholder="10.11.99.1"
                     />
                   </div>
@@ -1683,13 +1703,28 @@ export default function App() {
                   {authType === 'password' ? (
                     <div className="space-y-2">
                       <Label htmlFor="password">SSH Password</Label>
-                      <Input
-                        id="password"
-                        type="password"
-                        value={password}
-                        onChange={(e) => setPassword(e.target.value)}
-                        placeholder="Enter SSH password"
-                      />
+                      <div className="relative">
+                        <Input
+                          id="password"
+                          type={showPassword ? "text" : "password"}
+                          value={password}
+                          onChange={(e) => setPassword(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && !connecting && password) {
+                              handleConnect(true)
+                            }
+                          }}
+                          placeholder="Enter SSH password"
+                          className="pr-10"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowPassword(!showPassword)}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                        >
+                          {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                        </button>
+                      </div>
                     </div>
                   ) : (
                     <>
@@ -1713,13 +1748,28 @@ export default function App() {
                       </div>
                       <div className="space-y-2">
                         <Label htmlFor="keyPassphrase">Key Passphrase (if encrypted)</Label>
-                        <Input
-                          id="keyPassphrase"
-                          type="password"
-                          value={keyPassphrase}
-                          onChange={(e) => setKeyPassphrase(e.target.value)}
-                          placeholder="Leave empty if not encrypted"
-                        />
+                        <div className="relative">
+                          <Input
+                            id="keyPassphrase"
+                            type={showKeyPassphrase ? "text" : "password"}
+                            value={keyPassphrase}
+                            onChange={(e) => setKeyPassphrase(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' && !connecting) {
+                                handleConnect(true)
+                              }
+                            }}
+                            placeholder="Leave empty if not encrypted"
+                            className="pr-10"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setShowKeyPassphrase(!showKeyPassphrase)}
+                            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                          >
+                            {showKeyPassphrase ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                          </button>
+                        </div>
                       </div>
                     </>
                   )}
@@ -2790,7 +2840,10 @@ export default function App() {
       </Dialog>
 
       {/* Save Device Dialog */}
-      <Dialog open={showSaveDeviceDialog} onOpenChange={setShowSaveDeviceDialog}>
+      <Dialog open={showSaveDeviceDialog} onOpenChange={(open) => {
+        setShowSaveDeviceDialog(open)
+        if (!open) setSaveDeviceError('')
+      }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Save Device</DialogTitle>
@@ -2808,17 +2861,22 @@ export default function App() {
                 placeholder={getDisplayName(deviceInfo.machine || '') || 'My reMarkable'}
               />
             </div>
+            {saveDeviceError && (
+              <p className="text-sm text-destructive">{saveDeviceError}</p>
+            )}
           </div>
           <DialogFooter>
             <Button
               variant="outline"
               onClick={() => setShowSaveDeviceDialog(false)}
             >
-              Skip
+              {saveDeviceError ? 'Close' : 'Skip'}
             </Button>
-            <Button onClick={handleSaveDevice} disabled={!deviceName.trim()}>
-              Save Device
-            </Button>
+            {!saveDeviceError && (
+              <Button onClick={handleSaveDevice} disabled={!deviceName.trim()}>
+                Save Device
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
