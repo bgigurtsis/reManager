@@ -15,6 +15,7 @@ import { ConsolidatedWarningBanner } from '@/components/ConsolidatedWarningBanne
 import { UpgradeChecklist } from '@/components/UpgradeChecklist'
 import { VellumInstallPrompt } from '@/components/VellumInstallPrompt'
 import { SettingsDialog } from '@/components/SettingsDialog'
+import { InteractiveTerminal } from '@/components/InteractiveTerminal'
 import { DnsErrorModal } from '@/components/DnsErrorModal'
 import { TimezoneCombobox } from '@/components/TimezoneCombobox'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
@@ -138,6 +139,11 @@ declare global {
           RunCommand(cmd: string): Promise<string>
           RunCommandWithOutput(cmd: string, requiresPTY: boolean): Promise<void>
           StopCommand(): Promise<void>
+          StartShell(rows: number, cols: number): Promise<void>
+          WriteToShell(data: string): Promise<void>
+          ResizeShell(rows: number, cols: number): Promise<void>
+          StopShell(): Promise<void>
+          IsShellActive(): Promise<boolean>
           GetDeviceInfo(): Promise<Record<string, string>>
           GetUpdateServiceStatus(): Promise<UpdateServiceStatus>
           GetDefaultSSHKeys(): Promise<SSHKey[]>
@@ -227,7 +233,7 @@ export default function App() {
   const [runningHookTitle, setRunningHookTitle] = useState<string | null>(null)
   const connectAttemptRef = useRef(0)
 
-  const [activeTab, setActiveTab] = useState<'mods' | 'maintenance'>('mods')
+  const [activeTab, setActiveTab] = useState<'mods' | 'maintenance' | 'utilities'>('mods')
   const [installQueue, setInstallQueue] = useState<Set<string>>(new Set())
   const [uninstallQueue, setUninstallQueue] = useState<Set<string>>(new Set())
   const [pendingUninstall, setPendingUninstall] = useState<{
@@ -262,6 +268,7 @@ export default function App() {
   const [tabVisibility, setTabVisibility] = useState<Record<string, boolean>>({
     mods: true,
     maintenance: true,
+    utilities: true,
   })
   const [proxyMode, setProxyMode] = useState(true)
   const [dnsErrorShown, setDnsErrorShown] = useState(false)
@@ -449,7 +456,7 @@ export default function App() {
         setSystemTasks(tasks || [])
         setSavedDevices(devices || [])
         setAppVersion(version || 'dev')
-        setTabVisibility(settings?.tabVisibility || { mods: true, maintenance: true })
+        setTabVisibility(settings?.tabVisibility || { mods: true, maintenance: true, utilities: true })
         setProxyMode(settings?.proxyMode ?? true)
       } catch (err) {
         console.log('Could not load initial data:', err)
@@ -469,7 +476,10 @@ export default function App() {
     if (activeTab === 'mods' && !tabVisibility.mods) {
       setActiveTab('maintenance')
     }
-  }, [tabVisibility.mods, activeTab])
+    if (activeTab === 'utilities' && !tabVisibility.utilities) {
+      setActiveTab('maintenance')
+    }
+  }, [tabVisibility.mods, tabVisibility.utilities, activeTab])
 
   const handleKeySelect = async (value: string) => {
     if (value === '__other__') {
@@ -1859,10 +1869,11 @@ export default function App() {
         )}
 
         {step !== 'connect' && (
-          <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'mods' | 'maintenance')}>
-            <TabsList className={`grid w-full mb-4 ${tabVisibility.mods ? 'grid-cols-2' : 'grid-cols-1'}`}>
+          <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'mods' | 'maintenance' | 'utilities')}>
+            <TabsList className={`grid w-full mb-4 grid-cols-${[tabVisibility.mods, true, tabVisibility.utilities].filter(Boolean).length}`}>
               {tabVisibility.mods && <TabsTrigger value="mods">Mods</TabsTrigger>}
               <TabsTrigger value="maintenance">Maintenance</TabsTrigger>
+              {tabVisibility.utilities && <TabsTrigger value="utilities">Utilities</TabsTrigger>}
             </TabsList>
 
             {tabVisibility.mods && (
@@ -2449,6 +2460,23 @@ export default function App() {
                 )}
               </div>
             </TabsContent>
+
+            {tabVisibility.utilities && (
+              <TabsContent value="utilities" forceMount className={activeTab === 'utilities' ? '' : 'hidden'}>
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Terminal</CardTitle>
+                    <CardDescription>Interactive SSH shell to your reMarkable</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <InteractiveTerminal
+                      isConnected={connectionStatus === 'connected'}
+                      visible={activeTab === 'utilities'}
+                    />
+                  </CardContent>
+                </Card>
+              </TabsContent>
+            )}
           </Tabs>
         )}
       </div>

@@ -58,6 +58,11 @@ type App struct {
 	reconnectMu       sync.Mutex
 	fastDialMode      bool
 	installCancelCh   chan struct{}
+
+	shellSession *ssh.Session
+	shellStdin   io.WriteCloser
+	shellMu      sync.Mutex
+	shellActive  bool
 }
 
 func NewApp() *App {
@@ -675,6 +680,8 @@ func (a *App) Disconnect() {
 	a.reconnecting = false
 	a.reconnectMu.Unlock()
 
+	a.StopShell()
+
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -1054,6 +1061,136 @@ func (a *App) StopCommand() {
 	} else {
 		debugln("[DEBUG] No stdin available to send Ctrl+C")
 	}
+}
+
+func (a *App) StartShell(rows, cols int) error {
+	a.shellMu.Lock()
+	defer a.shellMu.Unlock()
+
+	if a.shellActive {
+		return fmt.Errorf("shell already running")
+	}
+
+	a.mu.Lock()
+	if a.client == nil {
+		a.mu.Unlock()
+		return fmt.Errorf("not connected")
+	}
+
+	session, err := a.client.NewSession()
+	if err != nil {
+		a.mu.Unlock()
+		return fmt.Errorf("failed to create session: %w", err)
+	}
+	a.mu.Unlock()
+
+	if rows <= 0 {
+		rows = 24
+	}
+	if cols <= 0 {
+		cols = 80
+	}
+
+	err = session.RequestPty("xterm-256color", rows, cols, ssh.TerminalModes{
+		ssh.ECHO:          1,
+		ssh.TTY_OP_ISPEED: 14400,
+		ssh.TTY_OP_OSPEED: 14400,
+	})
+	if err != nil {
+		session.Close()
+		return fmt.Errorf("failed to request PTY: %w", err)
+	}
+
+	stdout, err := session.StdoutPipe()
+	if err != nil {
+		session.Close()
+		return fmt.Errorf("failed to get stdout: %w", err)
+	}
+
+	stdin, err := session.StdinPipe()
+	if err != nil {
+		session.Close()
+		return fmt.Errorf("failed to get stdin: %w", err)
+	}
+
+	if err := session.Shell(); err != nil {
+		session.Close()
+		return fmt.Errorf("failed to start shell: %w", err)
+	}
+
+	a.shellSession = session
+	a.shellStdin = stdin
+	a.shellActive = true
+
+	runtime.EventsEmit(a.ctx, "shell:started")
+
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			n, err := stdout.Read(buf)
+			if n > 0 {
+				runtime.EventsEmit(a.ctx, "shell:output", string(buf[:n]))
+			}
+			if err != nil {
+				break
+			}
+		}
+
+		a.shellMu.Lock()
+		a.shellActive = false
+		a.shellSession = nil
+		a.shellStdin = nil
+		a.shellMu.Unlock()
+
+		runtime.EventsEmit(a.ctx, "shell:stopped")
+	}()
+
+	return nil
+}
+
+func (a *App) WriteToShell(data string) error {
+	a.shellMu.Lock()
+	stdin := a.shellStdin
+	a.shellMu.Unlock()
+
+	if stdin == nil {
+		return fmt.Errorf("shell not active")
+	}
+
+	_, err := stdin.Write([]byte(data))
+	return err
+}
+
+func (a *App) ResizeShell(rows, cols int) error {
+	a.shellMu.Lock()
+	session := a.shellSession
+	a.shellMu.Unlock()
+
+	if session == nil {
+		return fmt.Errorf("shell not active")
+	}
+
+	return session.WindowChange(rows, cols)
+}
+
+func (a *App) StopShell() {
+	a.shellMu.Lock()
+	session := a.shellSession
+	stdin := a.shellStdin
+	a.shellMu.Unlock()
+
+	if stdin != nil {
+		stdin.Close()
+	}
+	if session != nil {
+		session.Close()
+	}
+}
+
+func (a *App) IsShellActive() bool {
+	a.shellMu.Lock()
+	defer a.shellMu.Unlock()
+	return a.shellActive
 }
 
 func (a *App) GetDeviceInfo() map[string]string {
@@ -2310,23 +2447,20 @@ type SettingsInfo struct {
 func (a *App) GetSettings() SettingsInfo {
 	if a.settingsStore == nil {
 		return SettingsInfo{
-			TabVisibility: map[string]bool{"mods": true, "maintenance": true},
+			TabVisibility: map[string]bool{"mods": true, "maintenance": true, "utilities": true},
 			ProxyMode:     true,
 		}
 	}
 	settings, err := a.settingsStore.Load()
 	if err != nil {
 		return SettingsInfo{
-			TabVisibility: map[string]bool{"mods": true, "maintenance": true},
+			TabVisibility: map[string]bool{"mods": true, "maintenance": true, "utilities": true},
 			ProxyMode:     true,
 		}
 	}
 	return SettingsInfo{
-		TabVisibility: map[string]bool{
-			"mods":        settings.TabVisibility.Mods,
-			"maintenance": settings.TabVisibility.Maintenance,
-		},
-		ProxyMode: settings.ProxyMode,
+		TabVisibility: settings.TabVisibility,
+		ProxyMode:     settings.ProxyMode,
 	}
 }
 
@@ -2335,11 +2469,8 @@ func (a *App) SaveSettings(tabVisibility map[string]bool, proxyMode bool) error 
 		return fmt.Errorf("settings store not initialized")
 	}
 	settings := &storage.Settings{
-		TabVisibility: storage.TabVisibility{
-			Mods:        tabVisibility["mods"],
-			Maintenance: tabVisibility["maintenance"],
-		},
-		ProxyMode: proxyMode,
+		TabVisibility: storage.TabVisibility(tabVisibility),
+		ProxyMode:     proxyMode,
 	}
 	return a.settingsStore.Save(settings)
 }

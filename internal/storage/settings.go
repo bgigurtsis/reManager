@@ -7,10 +7,7 @@ import (
 	"sync"
 )
 
-type TabVisibility struct {
-	Mods        bool `json:"mods"`
-	Maintenance bool `json:"maintenance"`
-}
+type TabVisibility map[string]bool
 
 type Settings struct {
 	TabVisibility TabVisibility `json:"tabVisibility"`
@@ -62,6 +59,18 @@ func (s *SettingsStore) Load() (*Settings, error) {
 		}
 	}
 
+	// Merge with defaults so new tabs get their default values
+	defaults := s.defaultSettings()
+	if settings.TabVisibility == nil {
+		settings.TabVisibility = defaults.TabVisibility
+	} else {
+		for key, val := range defaults.TabVisibility {
+			if _, exists := settings.TabVisibility[key]; !exists {
+				settings.TabVisibility[key] = val
+			}
+		}
+	}
+
 	return &settings, nil
 }
 
@@ -79,8 +88,9 @@ func (s *SettingsStore) Save(settings *Settings) error {
 func (s *SettingsStore) defaultSettings() *Settings {
 	return &Settings{
 		TabVisibility: TabVisibility{
-			Mods:        true,
-			Maintenance: true,
+			"mods":        true,
+			"maintenance": true,
+			"utilities":   true,
 		},
 		ProxyMode: true,
 	}

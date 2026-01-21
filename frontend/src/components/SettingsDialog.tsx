@@ -34,20 +34,22 @@ export function SettingsDialog({
   uninstallOutput,
   appVersion,
 }: SettingsDialogProps) {
-  const [localTabVisibility, setLocalTabVisibility] = useState(tabVisibility)
+  const defaultTabVisibility = { mods: true, maintenance: true, utilities: true }
+
+  const [localTabVisibility, setLocalTabVisibility] = useState({ ...defaultTabVisibility, ...tabVisibility })
   const [localProxyMode, setLocalProxyMode] = useState(proxyMode)
   const [showUninstallConfirm, setShowUninstallConfirm] = useState(false)
   const [removePackages, setRemovePackages] = useState(true)
 
   useEffect(() => {
     if (open) {
-      setLocalTabVisibility(tabVisibility)
+      setLocalTabVisibility({ ...defaultTabVisibility, ...tabVisibility })
       setLocalProxyMode(proxyMode)
     }
   }, [open, tabVisibility, proxyMode])
 
   const handleCancel = () => {
-    setLocalTabVisibility(tabVisibility)
+    setLocalTabVisibility({ ...defaultTabVisibility, ...tabVisibility })
     setLocalProxyMode(proxyMode)
     setShowUninstallConfirm(false)
     onOpenChange(false)
@@ -61,7 +63,7 @@ export function SettingsDialog({
   const handleOpenChange = (newOpen: boolean) => {
     if (!newOpen) {
       setShowUninstallConfirm(false)
-      setLocalTabVisibility(tabVisibility)
+      setLocalTabVisibility({ ...defaultTabVisibility, ...tabVisibility })
       setLocalProxyMode(proxyMode)
     }
     onOpenChange(newOpen)
@@ -92,6 +94,14 @@ export function SettingsDialog({
                   id="tab-mods"
                   checked={localTabVisibility.mods}
                   onCheckedChange={(v) => setLocalTabVisibility({ ...localTabVisibility, mods: v })}
+                />
+              </div>
+              <div className="flex items-center justify-between">
+                <Label htmlFor="tab-utilities" className="font-normal">Utilities</Label>
+                <Switch
+                  id="tab-utilities"
+                  checked={localTabVisibility.utilities}
+                  onCheckedChange={(v) => setLocalTabVisibility({ ...localTabVisibility, utilities: v })}
                 />
               </div>
             </CardContent>
