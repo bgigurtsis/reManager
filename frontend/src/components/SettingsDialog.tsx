@@ -196,7 +196,7 @@ export function SettingsDialog({
           </Button>
         </DialogFooter>
 
-        <div className="absolute bottom-4 left-0 right-0 text-sm text-muted-foreground text-center">
+        <div className="flex-shrink-0 text-sm text-muted-foreground text-center pt-2">
           <span>reManager {appVersion}</span>
           <span className="mx-2">·</span>
           <button

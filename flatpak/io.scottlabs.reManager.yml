@@ -1,6 +1,6 @@
 app-id: io.scottlabs.reManager
 runtime: org.gnome.Platform
-runtime-version: '48'
+runtime-version: '49'
 sdk: org.gnome.Sdk
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.golang
@@ -30,9 +30,11 @@ modules:
     buildsystem: simple
     build-commands:
       - |
+        mkdir -p vendor && \
+        cp flatpak/vendor-modules.txt vendor/modules.txt && \
         npm install --offline --prefix=frontend && \
         go build -o $GOBIN/wails ./vendor/github.com/wailsapp/wails/v2/cmd/wails && \
-        $GOBIN/wails build -tags webkit2_41 -m -nosyncgomod
+        $GOBIN/wails build -tags webkit2_41 -m -nosyncgomod -ldflags "-X main.version=$(git describe --tags --always)"
       - install -Dm755 build/bin/reManager /app/bin/reManager
       - install -Dm644 flatpak/io.scottlabs.reManager.desktop /app/share/applications/io.scottlabs.reManager.desktop
       - install -Dm644 flatpak/io.scottlabs.reManager.metainfo.xml /app/share/metainfo/io.scottlabs.reManager.metainfo.xml

@@ -12,6 +12,7 @@ repo/
 
 # Dependencies
 frontend/node_modules/
+vendor/
 
 # Generated Files
 frontend/wailsjs/
