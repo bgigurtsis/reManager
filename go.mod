@@ -9,6 +9,7 @@ require (
 	github.com/zalando/go-keyring v0.2.6
 	golang.org/x/crypto v0.41.0
 	golang.org/x/term v0.34.0
+	gopkg.in/ini.v1 v1.67.1
 )
 
 require (

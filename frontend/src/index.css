@@ -136,3 +136,17 @@
     cursor: pointer;
   }
 }
+
+/* Monaco editor fixes */
+.monaco-editor .find-widget {
+  z-index: 100 !important;
+}
+
+.monaco-hover {
+  z-index: 101 !important;
+}
+
+.context-view.monaco-component {
+  white-space: nowrap !important;
+  width: max-content !important;
+}

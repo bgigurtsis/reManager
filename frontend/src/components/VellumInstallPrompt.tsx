@@ -1,6 +1,7 @@
-import { Loader2, Package } from 'lucide-react'
+import { Loader2, Package, AlertCircle } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { TerminalWithCopy } from '@/components/TerminalWithCopy'
 
 interface VellumInstallPromptProps {
@@ -53,9 +54,10 @@ export function VellumInstallPrompt({
             </p>
 
             {bootstrapError && (
-              <div className="bg-destructive/10 border border-destructive/20 text-destructive px-4 py-3 rounded-lg text-sm">
-                Installation failed: {bootstrapError}
-              </div>
+              <Alert variant="destructive">
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription>Installation failed: {bootstrapError}</AlertDescription>
+              </Alert>
             )}
 
             <div className="flex justify-end pt-2">

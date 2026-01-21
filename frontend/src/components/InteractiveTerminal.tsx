@@ -199,11 +199,11 @@ export function InteractiveTerminal({ isConnected, visible, onRunningChange }: I
     <div style={{ display: visible ? 'block' : 'none' }}>
       <div className="flex gap-2 mb-2">
         {!shellRunning ? (
-          <Button variant="outline" className="w-1/2" onClick={startShell} disabled={!isConnected}>
+          <Button variant="outline" className="w-full" onClick={startShell} disabled={!isConnected}>
             Start Terminal
           </Button>
         ) : (
-          <Button variant="outline" className="w-1/2" onClick={stopShell}>
+          <Button variant="outline" className="w-full md:w-1/2" onClick={stopShell}>
             Stop Terminal
           </Button>
         )}

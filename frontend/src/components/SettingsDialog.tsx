@@ -44,6 +44,11 @@ export function SettingsDialog({
   const [showUninstallConfirm, setShowUninstallConfirm] = useState(false)
   const [removePackages, setRemovePackages] = useState(true)
 
+  const hasChanges =
+    localProxyMode !== proxyMode ||
+    localSuppressSystemFileWarnings !== suppressSystemFileWarnings ||
+    JSON.stringify(localTabVisibility) !== JSON.stringify({ ...defaultTabVisibility, ...tabVisibility })
+
   useEffect(() => {
     if (open) {
       setLocalTabVisibility({ ...defaultTabVisibility, ...tabVisibility })
@@ -115,38 +120,32 @@ export function SettingsDialog({
 
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-sm">Proxy Mode</CardTitle>
+              <CardTitle className="text-sm">Behavior</CardTitle>
               <CardDescription className="text-xs">
-                Download packages through reManager before installing on the tablet.
-                This allows installing packages even if the tablet is not connected to the internet or has connectivity issues.
+                Configure how reManager operates
               </CardDescription>
             </CardHeader>
-            <CardContent>
-              <div className="flex items-center justify-between">
-                <Label htmlFor="proxy-mode" className="font-normal">Enable Proxy Mode</Label>
+            <CardContent className="space-y-4">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <Label htmlFor="proxy-mode" className="font-normal">Proxy Mode</Label>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Download packages through reManager before installing on the tablet.
+                    Useful if the tablet has limited internet connectivity.
+                  </p>
+                </div>
                 <Switch
                   id="proxy-mode"
                   checked={localProxyMode}
                   onCheckedChange={setLocalProxyMode}
                 />
               </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm">System File Warnings</CardTitle>
-              <CardDescription className="text-xs">
-                Show confirmation dialogs when modifying files in the system partition in the file browser.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
               <div className="flex items-center justify-between gap-4">
                 <div>
-                  <Label htmlFor="suppress-sys-warnings" className="font-normal">Suppress Warnings</Label>
+                  <Label htmlFor="suppress-sys-warnings" className="font-normal">Suppress System Warnings</Label>
                   <p className="text-xs text-muted-foreground mt-1">
-                    Disabling warnings can lead to accidental modification of critical system files,
-                    potentially making your device unbootable. Only disable if you are experienced with Linux systems.
+                    Skip confirmation dialogs when modifying system partition files.
+                    Only disable if you are experienced with Linux systems.
                   </p>
                 </div>
                 <Switch
@@ -159,7 +158,7 @@ export function SettingsDialog({
           </Card>
 
           {isConnected && vellumInstalled && (
-            <Card>
+            <Card className="border-destructive/50">
               <CardHeader className="pb-3">
                 <CardTitle className="text-sm">Uninstall</CardTitle>
                 <CardDescription className="text-xs">
@@ -232,7 +231,7 @@ export function SettingsDialog({
           <Button variant="outline" onClick={handleCancel}>
             Cancel
           </Button>
-          <Button onClick={handleSave}>
+          <Button onClick={handleSave} disabled={!hasChanges}>
             Save
           </Button>
         </DialogFooter>

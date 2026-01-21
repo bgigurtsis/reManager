@@ -17,6 +17,7 @@ import (
 	"github.com/pkg/sftp"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 	"golang.org/x/crypto/ssh"
+	"gopkg.in/ini.v1"
 
 	"reManager/internal/commands"
 	"reManager/internal/component"
@@ -2966,4 +2967,224 @@ func (a *App) CreateDirectory(path string) error {
 	}
 
 	return nil
+}
+
+type BackupInfo struct {
+	Name      string `json:"name"`
+	Timestamp int64  `json:"timestamp"`
+	Size      int64  `json:"size"`
+}
+
+func (a *App) ReadConfigFile() (string, error) {
+	a.mu.Lock()
+	client := a.client
+	a.mu.Unlock()
+
+	if client == nil {
+		return "", fmt.Errorf("not connected")
+	}
+
+	sftpClient, err := sftp.NewClient(client)
+	if err != nil {
+		return "", fmt.Errorf("failed to create SFTP client: %w", err)
+	}
+	defer sftpClient.Close()
+
+	file, err := sftpClient.Open("/home/root/.config/remarkable/xochitl.conf")
+	if err != nil {
+		return "", fmt.Errorf("failed to open config file: %w", err)
+	}
+	defer file.Close()
+
+	content, err := io.ReadAll(file)
+	if err != nil {
+		return "", fmt.Errorf("failed to read config file: %w", err)
+	}
+
+	return string(content), nil
+}
+
+func (a *App) WriteConfigFile(content string) error {
+	a.mu.Lock()
+	client := a.client
+	a.mu.Unlock()
+
+	if client == nil {
+		return fmt.Errorf("not connected")
+	}
+
+	_, err := ini.Load([]byte(content))
+	if err != nil {
+		return fmt.Errorf("invalid INI syntax: %w", err)
+	}
+
+	sftpClient, err := sftp.NewClient(client)
+	if err != nil {
+		return fmt.Errorf("failed to create SFTP client: %w", err)
+	}
+	defer sftpClient.Close()
+
+	tmpPath := "/home/root/.config/remarkable/xochitl.conf.tmp"
+	finalPath := "/home/root/.config/remarkable/xochitl.conf"
+
+	tmpFile, err := sftpClient.Create(tmpPath)
+	if err != nil {
+		return fmt.Errorf("failed to create temp file: %w", err)
+	}
+
+	_, err = tmpFile.Write([]byte(content))
+	if err != nil {
+		tmpFile.Close()
+		sftpClient.Remove(tmpPath)
+		return fmt.Errorf("failed to write to temp file: %w", err)
+	}
+	tmpFile.Close()
+
+	// Delete the target file first - Rename only works when destination doesn't exist
+	_ = sftpClient.Remove(finalPath)
+
+	err = sftpClient.Rename(tmpPath, finalPath)
+	if err != nil {
+		sftpClient.Remove(tmpPath)
+		return fmt.Errorf("failed to rename temp file: %w", err)
+	}
+
+	return nil
+}
+
+func (a *App) BackupConfigFile() (string, error) {
+	a.mu.Lock()
+	client := a.client
+	a.mu.Unlock()
+
+	if client == nil {
+		return "", fmt.Errorf("not connected")
+	}
+
+	sftpClient, err := sftp.NewClient(client)
+	if err != nil {
+		return "", fmt.Errorf("failed to create SFTP client: %w", err)
+	}
+	defer sftpClient.Close()
+
+	configPath := "/home/root/.config/remarkable/xochitl.conf"
+	file, err := sftpClient.Open(configPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to open config file: %w", err)
+	}
+	defer file.Close()
+
+	content, err := io.ReadAll(file)
+	if err != nil {
+		return "", fmt.Errorf("failed to read config file: %w", err)
+	}
+
+	backupName := fmt.Sprintf("xochitl.conf.backup-%s", time.Now().Format("2006-01-02-150405"))
+	backupPath := filepath.Join("/home/root/.config/remarkable", backupName)
+
+	backupFile, err := sftpClient.Create(backupPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to create backup file: %w", err)
+	}
+	defer backupFile.Close()
+
+	_, err = backupFile.Write(content)
+	if err != nil {
+		return "", fmt.Errorf("failed to write backup file: %w", err)
+	}
+
+	return backupName, nil
+}
+
+func (a *App) ListConfigBackups() ([]BackupInfo, error) {
+	a.mu.Lock()
+	client := a.client
+	a.mu.Unlock()
+
+	if client == nil {
+		return nil, fmt.Errorf("not connected")
+	}
+
+	sftpClient, err := sftp.NewClient(client)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create SFTP client: %w", err)
+	}
+	defer sftpClient.Close()
+
+	entries, err := sftpClient.ReadDir("/home/root/.config/remarkable")
+	if err != nil {
+		return nil, fmt.Errorf("failed to read directory: %w", err)
+	}
+
+	var backups []BackupInfo
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), "xochitl.conf.backup-") {
+			backups = append(backups, BackupInfo{
+				Name:      entry.Name(),
+				Timestamp: entry.ModTime().Unix(),
+				Size:      entry.Size(),
+			})
+		}
+	}
+
+	sort.Slice(backups, func(i, j int) bool {
+		return backups[i].Timestamp > backups[j].Timestamp
+	})
+
+	return backups, nil
+}
+
+func (a *App) RestoreConfigBackup(backupName string) error {
+	debugln("RestoreConfigBackup called with backupName:", backupName)
+	a.mu.Lock()
+	client := a.client
+	a.mu.Unlock()
+
+	if client == nil {
+		debugln("RestoreConfigBackup: not connected")
+		return fmt.Errorf("not connected")
+	}
+
+	if !strings.HasPrefix(backupName, "xochitl.conf.backup-") {
+		debugln("RestoreConfigBackup: invalid backup name")
+		return fmt.Errorf("invalid backup name")
+	}
+
+	sftpClient, err := sftp.NewClient(client)
+	if err != nil {
+		debugln("RestoreConfigBackup: failed to create SFTP client:", err)
+		return fmt.Errorf("failed to create SFTP client: %w", err)
+	}
+	defer sftpClient.Close()
+
+	backupPath := filepath.Join("/home/root/.config/remarkable", backupName)
+	debugln("RestoreConfigBackup: opening backup file:", backupPath)
+	file, err := sftpClient.Open(backupPath)
+	if err != nil {
+		debugln("RestoreConfigBackup: failed to open backup file:", err)
+		return fmt.Errorf("failed to open backup file: %w", err)
+	}
+	defer file.Close()
+
+	content, err := io.ReadAll(file)
+	if err != nil {
+		debugln("RestoreConfigBackup: failed to read backup file:", err)
+		return fmt.Errorf("failed to read backup file: %w", err)
+	}
+	debugln("RestoreConfigBackup: read", len(content), "bytes from backup")
+
+	_, err = ini.Load(content)
+	if err != nil {
+		debugln("RestoreConfigBackup: backup file has invalid INI syntax:", err)
+		return fmt.Errorf("backup file has invalid INI syntax: %w", err)
+	}
+
+	debugln("RestoreConfigBackup: calling WriteConfigFile")
+	err = a.WriteConfigFile(string(content))
+	if err != nil {
+		debugln("RestoreConfigBackup: WriteConfigFile failed:", err)
+	} else {
+		debugln("RestoreConfigBackup: success")
+	}
+	return err
 }

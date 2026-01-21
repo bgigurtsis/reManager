@@ -128,7 +128,6 @@ function getFileIcon(file: FileInfo) {
 }
 
 export function FileBrowser({ isConnected, suppressSystemFileWarnings }: FileBrowserProps) {
-  const [browserActive, setBrowserActive] = useState(false)
   const [showHidden, setShowHidden] = useState(false)
   const [sortBy, setSortBy] = useState<'name' | 'size' | 'modTime'>('name')
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc')
@@ -172,13 +171,12 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings }: FileBro
   }, [isConnected])
 
   useEffect(() => {
-    if (browserActive && isConnected) {
+    if (isConnected) {
       loadDirectory(currentPath)
-    } else if (!isConnected) {
+    } else {
       setFiles([])
-      setBrowserActive(false)
     }
-  }, [browserActive, isConnected])
+  }, [isConnected])
 
   useEffect(() => {
     const handleProgress = (progress: unknown) => {
@@ -345,22 +343,7 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings }: FileBro
 
   return (
     <div className="space-y-4" onClick={closeContextMenu}>
-      {/* Start/Stop button */}
-      <div className="flex gap-2">
-        {!browserActive ? (
-          <Button variant="outline" className="w-1/2" onClick={() => setBrowserActive(true)} disabled={!isConnected}>
-            Open File Browser
-          </Button>
-        ) : (
-          <Button variant="outline" className="w-1/2" onClick={() => setBrowserActive(false)}>
-            Close File Browser
-          </Button>
-        )}
-      </div>
-
-      {browserActive && isConnected && (
-        <>
-          {/* Breadcrumb */}
+      {/* Breadcrumb */}
           <div className="flex items-center gap-2 overflow-x-auto pb-2">
             <Breadcrumb>
               <BreadcrumbList>
@@ -629,8 +612,6 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings }: FileBro
               </Button>
             </div>
           )}
-        </>
-      )}
 
       {/* Delete confirmation dialog */}
       <Dialog open={deleteDialog !== null} onOpenChange={(open) => !open && setDeleteDialog(null)}>

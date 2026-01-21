@@ -1,5 +1,6 @@
 import { AlertTriangle, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Alert, AlertTitle, AlertDescription, AlertAction } from '@/components/ui/alert'
 
 interface ConsolidatedWarningBannerProps {
   warnings: {
@@ -22,10 +23,11 @@ export function ConsolidatedWarningBanner({
   if (!hasWarnings) return null
 
   return (
-    <div className="bg-yellow-500/10 border border-yellow-500/20 rounded-lg p-4 flex items-center justify-between gap-4">
-      <div className="flex items-center gap-3">
-        <AlertTriangle className="h-5 w-5 text-yellow-500 flex-shrink-0" />
-        <ul className="text-sm space-y-1 list-disc pl-6">
+    <Alert className="border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950 [&>svg]:text-amber-600 dark:[&>svg]:text-amber-400">
+      <AlertTriangle className="h-4 w-4" />
+      <AlertTitle className="text-amber-900 dark:text-amber-50">Changes Detected</AlertTitle>
+      <AlertDescription>
+        <ul className="space-y-1 list-disc pl-4">
           {warnings.osUpgrade && (
             <li>OS change detected ({warnings.osUpgrade.prevVersion} → {warnings.osUpgrade.newVersion}). Run reenable to restore mods.</li>
           )}
@@ -39,15 +41,15 @@ export function ConsolidatedWarningBanner({
             <li>Auto-updates are enabled and may interfere with mods</li>
           )}
         </ul>
-      </div>
-      <div className="flex items-center gap-2 flex-shrink-0">
-        <Button size="sm" onClick={onGoToMaintenance}>
+      </AlertDescription>
+      <AlertAction>
+        <Button size="xs" onClick={onGoToMaintenance}>
           Maintenance
         </Button>
-        <Button variant="ghost" size="sm" onClick={onDismiss}>
-          <X className="h-4 w-4" />
+        <Button variant="ghost" size="xs" onClick={onDismiss}>
+          <X className="h-3 w-3" />
         </Button>
-      </div>
-    </div>
+      </AlertAction>
+    </Alert>
   )
 }

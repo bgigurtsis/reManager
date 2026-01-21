@@ -17,6 +17,7 @@ import { VellumInstallPrompt } from '@/components/VellumInstallPrompt'
 import { SettingsDialog } from '@/components/SettingsDialog'
 import { InteractiveTerminal } from '@/components/InteractiveTerminal'
 import { FileBrowser } from '@/components/FileBrowser'
+import { ConfigEditor } from '@/components/ConfigEditor'
 import { DnsErrorModal } from '@/components/DnsErrorModal'
 import { TimezoneCombobox } from '@/components/TimezoneCombobox'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
@@ -199,6 +200,11 @@ declare global {
           DeletePath(path: string): Promise<void>
           RenamePath(oldPath: string, newPath: string): Promise<void>
           CreateDirectory(path: string): Promise<void>
+          ReadConfigFile(): Promise<string>
+          WriteConfigFile(content: string): Promise<void>
+          BackupConfigFile(): Promise<string>
+          ListConfigBackups(): Promise<Array<{name: string; timestamp: number; size: number}>>
+          RestoreConfigBackup(backupName: string): Promise<void>
         }
       }
     }
@@ -271,6 +277,9 @@ export default function App() {
   const manuallyStoppedRef = useRef(false)
 
   const [showSettingsDialog, setShowSettingsDialog] = useState(false)
+  const [showFileBrowser, setShowFileBrowser] = useState(false)
+  const [showConfigEditor, setShowConfigEditor] = useState(false)
+  const [isTerminalRunning, setIsTerminalRunning] = useState(false)
   const [appVersion, setAppVersion] = useState('dev')
   const [tabVisibility, setTabVisibility] = useState<Record<string, boolean>>({
     mods: true,
@@ -2473,17 +2482,8 @@ export default function App() {
 
             {tabVisibility.utilities && (
               <TabsContent value="utilities" forceMount className={activeTab === 'utilities' ? '' : 'hidden'}>
-                <div className="space-y-4">
-                  <Card>
-                    <CardHeader>
-                      <CardTitle>File Browser</CardTitle>
-                      <CardDescription>Browse and transfer files on your reMarkable</CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                      <FileBrowser isConnected={connectionStatus === 'connected'} suppressSystemFileWarnings={suppressSystemFileWarnings} />
-                    </CardContent>
-                  </Card>
-                  <Card>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <Card className={isTerminalRunning ? 'md:col-span-2' : ''}>
                     <CardHeader>
                       <CardTitle>Terminal</CardTitle>
                       <CardDescription>Interactive SSH shell to your reMarkable</CardDescription>
@@ -2492,7 +2492,40 @@ export default function App() {
                       <InteractiveTerminal
                         isConnected={connectionStatus === 'connected'}
                         visible={activeTab === 'utilities'}
+                        onRunningChange={setIsTerminalRunning}
                       />
+                    </CardContent>
+                  </Card>
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>File Browser</CardTitle>
+                      <CardDescription>Browse and transfer files on your reMarkable</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <Button
+                        className="w-full"
+                        variant="outline"
+                        onClick={() => setShowFileBrowser(true)}
+                        disabled={connectionStatus !== 'connected'}
+                      >
+                        Open File Browser
+                      </Button>
+                    </CardContent>
+                  </Card>
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>Configuration Editor</CardTitle>
+                      <CardDescription>Edit settings</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <Button
+                        className="w-full"
+                        variant="outline"
+                        onClick={() => setShowConfigEditor(true)}
+                        disabled={connectionStatus !== 'connected'}
+                      >
+                        xochitl.conf
+                      </Button>
                     </CardContent>
                   </Card>
                 </div>
@@ -2941,6 +2974,110 @@ export default function App() {
         onClose={() => setShowDnsErrorModal(false)}
         onEnableProxyMode={handleEnableProxyModeFromModal}
       />
+
+      {showFileBrowser && (
+        <div className="fixed inset-0 z-50 bg-background overflow-auto">
+          <div className="min-h-screen p-6">
+            <div className="space-y-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h1 className="text-3xl font-bold text-foreground">reManager</h1>
+                  <p className="text-muted-foreground">Manage packages on your reMarkable</p>
+                </div>
+                <div className="flex items-center gap-2 text-sm">
+                  {device && (
+                    <span className="text-muted-foreground">
+                      {getDisplayName(deviceInfo.machine || device)} ({deviceInfo.firmware || 'unknown firmware'})
+                    </span>
+                  )}
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button variant="ghost" size="sm" onClick={() => setShowSettingsDialog(true)}>
+                        <Settings className="h-4 w-4" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>Settings</TooltipContent>
+                  </Tooltip>
+                  {device && (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button variant="ghost" size="sm" onClick={handleDisconnect}>
+                          <Unplug className="h-4 w-4" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Disconnect</TooltipContent>
+                    </Tooltip>
+                  )}
+                </div>
+              </div>
+              <hr className="border-border" />
+              <div className="flex items-center justify-between">
+                <h2 className="text-xl font-semibold">File Browser</h2>
+                <Button variant="ghost" size="sm" onClick={() => setShowFileBrowser(false)}>
+                  <X className="h-4 w-4 mr-2" />
+                  Close
+                </Button>
+              </div>
+              <FileBrowser
+                isConnected={connectionStatus === 'connected'}
+                suppressSystemFileWarnings={suppressSystemFileWarnings}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showConfigEditor && (
+        <div className="fixed inset-0 z-50 bg-background overflow-auto">
+          <div className="min-h-screen p-6">
+            <div className="space-y-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h1 className="text-3xl font-bold text-foreground">reManager</h1>
+                  <p className="text-muted-foreground">Manage packages on your reMarkable</p>
+                </div>
+                <div className="flex items-center gap-2 text-sm">
+                  {device && (
+                    <span className="text-muted-foreground">
+                      {getDisplayName(deviceInfo.machine || device)} ({deviceInfo.firmware || 'unknown firmware'})
+                    </span>
+                  )}
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button variant="ghost" size="sm" onClick={() => setShowSettingsDialog(true)}>
+                        <Settings className="h-4 w-4" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>Settings</TooltipContent>
+                  </Tooltip>
+                  {device && (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button variant="ghost" size="sm" onClick={handleDisconnect}>
+                          <Unplug className="h-4 w-4" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Disconnect</TooltipContent>
+                    </Tooltip>
+                  )}
+                </div>
+              </div>
+
+              <hr className="border-border" />
+
+              <div className="flex items-center justify-between">
+                <h2 className="text-xl font-semibold">xochitl.conf Editor</h2>
+                <Button variant="ghost" size="sm" onClick={() => setShowConfigEditor(false)}>
+                  <X className="h-4 w-4 mr-2" />
+                  Close
+                </Button>
+              </div>
+
+              <ConfigEditor isConnected={connectionStatus === 'connected'} />
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   )
