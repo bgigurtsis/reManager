@@ -1,7 +1,7 @@
 import { Loader2, Package } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Terminal } from '@/components/Terminal'
+import { TerminalWithCopy } from '@/components/TerminalWithCopy'
 
 interface VellumInstallPromptProps {
   bootstrapping: boolean
@@ -41,7 +41,7 @@ export function VellumInstallPrompt({
             </div>
             {bootstrapOutput && (
               <div className="h-[300px] rounded-lg overflow-hidden">
-                <Terminal output={bootstrapOutput} />
+                <TerminalWithCopy output={bootstrapOutput} />
               </div>
             )}
           </>

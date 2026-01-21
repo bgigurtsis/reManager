@@ -5,7 +5,7 @@ import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Loader2, AlertTriangle } from 'lucide-react'
-import { Terminal } from '@/components/Terminal'
+import { TerminalWithCopy } from '@/components/TerminalWithCopy'
 
 interface SettingsDialogProps {
   open: boolean
@@ -136,7 +136,7 @@ export function SettingsDialog({
                     </div>
                     {uninstallOutput && (
                       <div className="h-[200px] rounded-lg overflow-hidden">
-                        <Terminal output={uninstallOutput} />
+                        <TerminalWithCopy output={uninstallOutput} />
                       </div>
                     )}
                   </div>
