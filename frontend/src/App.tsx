@@ -11,7 +11,7 @@ import { Sheet, SheetContent } from '@/components/ui/sheet'
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
 import { ProgressModal } from '@/components/ProgressModal'
 import { PackageDetailPanel } from '@/components/PackageDetailPanel'
-import { NotificationBanner } from '@/components/NotificationBanner'
+import { ConsolidatedWarningBanner } from '@/components/ConsolidatedWarningBanner'
 import { UpgradeChecklist } from '@/components/UpgradeChecklist'
 import { VellumInstallPrompt } from '@/components/VellumInstallPrompt'
 import { SettingsDialog } from '@/components/SettingsDialog'
@@ -1385,17 +1385,6 @@ export default function App() {
     await window.go.main.App.RunPackageUpgrade()
   }
 
-  const handleHashtabRebuild = async () => {
-    setShowProgressModal(true)
-    setProgressModalType('maintenance')
-    setProgressPercentage(0)
-    setCommandRunning(true)
-    setMaintenanceOutput('')
-    setCommandContext('maintenance')
-
-    await window.go.main.App.RunMaintenanceCommand('qt-resource-rebuilder', 'rebuild_hashtable', device)
-  }
-
   const handleTimezoneChange = async (timezone: string) => {
     setSelectedTimezone(timezone)
     try {
@@ -1848,53 +1837,23 @@ export default function App() {
           </div>
         )}
 
-        {/* Notification Banners */}
-        {step !== 'connect' && osUpgradeDetected && (
+        {/* Warning Banner */}
+        {step !== 'connect' && !osMismatchDetected && (
           <div className="mb-4">
-            <NotificationBanner
-              message={`OS change detected (${prevOsVersion} → ${newOsVersion}). Run reenable to restore system files changed by your mods.`}
-              actionLabel="Run Reenable"
-              onAction={handleRunReenable}
-              onDismiss={() => setOsUpgradeDetected(false)}
-              loading={runningReenable}
-            />
-          </div>
-        )}
-
-        {step !== 'connect' && hashtabMismatch && !osMismatchDetected && (
-          <div className="mb-4">
-            <NotificationBanner
-              message={`Hashtable built for OS ${hashtabMismatch.hashtabVersion}, but device is running ${hashtabMismatch.firmwareVersion}. Mods may not work correctly.`}
-              actionLabel="Rebuild Hashtable"
-              onAction={handleHashtabRebuild}
-              onDismiss={() => setHashtabMismatch(null)}
-            />
-          </div>
-        )}
-
-        {step !== 'connect' && timezoneMismatch && !osMismatchDetected && (
-          <div className="mb-4">
-            <NotificationBanner
-              message={`Device timezone (${timezoneMismatch.deviceTimezone}) differs from your preference (${timezoneMismatch.savedTimezone}).`}
-              actionLabel="Set Timezone"
-              onAction={handleSetTimezone}
-              onDismiss={() => setTimezoneMismatch(null)}
-              loading={settingTimezone}
-              loadingLabel="Setting..."
-            />
-          </div>
-        )}
-
-        {step !== 'connect' && showAutoUpdateBanner && !osMismatchDetected && (
-          <div className="mb-4">
-            <NotificationBanner
-              message="Auto-updates are enabled. This may interfere with your mods after a system update."
-              actionLabel="Go to Maintenance"
-              onAction={() => {
-                setActiveTab('maintenance')
+            <ConsolidatedWarningBanner
+              warnings={{
+                osUpgrade: osUpgradeDetected ? { prevVersion: prevOsVersion, newVersion: newOsVersion } : undefined,
+                hashtabMismatch: hashtabMismatch ? { hashtabVersion: hashtabMismatch.hashtabVersion, firmwareVersion: hashtabMismatch.firmwareVersion } : undefined,
+                timezoneMismatch: timezoneMismatch ? { deviceTimezone: timezoneMismatch.deviceTimezone, savedTimezone: timezoneMismatch.savedTimezone } : undefined,
+                autoUpdatesEnabled: showAutoUpdateBanner,
+              }}
+              onGoToMaintenance={() => setActiveTab('maintenance')}
+              onDismiss={() => {
+                setOsUpgradeDetected(false)
+                setHashtabMismatch(null)
+                setTimezoneMismatch(null)
                 setShowAutoUpdateBanner(false)
               }}
-              onDismiss={() => setShowAutoUpdateBanner(false)}
             />
           </div>
         )}
