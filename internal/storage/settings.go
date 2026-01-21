@@ -10,8 +10,9 @@ import (
 type TabVisibility map[string]bool
 
 type Settings struct {
-	TabVisibility TabVisibility `json:"tabVisibility"`
-	ProxyMode     bool          `json:"proxyMode"`
+	TabVisibility              TabVisibility `json:"tabVisibility"`
+	ProxyMode                  bool          `json:"proxyMode"`
+	SuppressSystemFileWarnings bool          `json:"suppressSystemFileWarnings"`
 }
 
 type SettingsStore struct {
@@ -92,6 +93,7 @@ func (s *SettingsStore) defaultSettings() *Settings {
 			"maintenance": true,
 			"utilities":   true,
 		},
-		ProxyMode: true,
+		ProxyMode:                  true,
+		SuppressSystemFileWarnings: false,
 	}
 }

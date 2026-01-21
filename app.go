@@ -9,10 +9,12 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/pkg/sftp"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 	"golang.org/x/crypto/ssh"
 
@@ -1862,6 +1864,23 @@ type InstallResult struct {
 	DNSError bool     `json:"dnsError"`
 }
 
+type FileInfo struct {
+	Name    string `json:"name"`
+	Path    string `json:"path"`
+	Size    int64  `json:"size"`
+	IsDir   bool   `json:"isDir"`
+	ModTime int64  `json:"modTime"`
+	Mode    string `json:"mode"`
+}
+
+type TransferProgress struct {
+	Filename   string  `json:"filename"`
+	BytesSent  int64   `json:"bytesSent"`
+	TotalBytes int64   `json:"totalBytes"`
+	Percentage float64 `json:"percentage"`
+	Status     string  `json:"status"`
+}
+
 type DialogRequest struct {
 	Title             string   `json:"title"`
 	Message           string   `json:"message"`
@@ -2440,37 +2459,42 @@ func (a *App) GetAppVersion() string {
 }
 
 type SettingsInfo struct {
-	TabVisibility map[string]bool `json:"tabVisibility"`
-	ProxyMode     bool            `json:"proxyMode"`
+	TabVisibility              map[string]bool `json:"tabVisibility"`
+	ProxyMode                  bool            `json:"proxyMode"`
+	SuppressSystemFileWarnings bool            `json:"suppressSystemFileWarnings"`
 }
 
 func (a *App) GetSettings() SettingsInfo {
 	if a.settingsStore == nil {
 		return SettingsInfo{
-			TabVisibility: map[string]bool{"mods": true, "maintenance": true, "utilities": true},
-			ProxyMode:     true,
+			TabVisibility:              map[string]bool{"mods": true, "maintenance": true, "utilities": true},
+			ProxyMode:                  true,
+			SuppressSystemFileWarnings: false,
 		}
 	}
 	settings, err := a.settingsStore.Load()
 	if err != nil {
 		return SettingsInfo{
-			TabVisibility: map[string]bool{"mods": true, "maintenance": true, "utilities": true},
-			ProxyMode:     true,
+			TabVisibility:              map[string]bool{"mods": true, "maintenance": true, "utilities": true},
+			ProxyMode:                  true,
+			SuppressSystemFileWarnings: false,
 		}
 	}
 	return SettingsInfo{
-		TabVisibility: settings.TabVisibility,
-		ProxyMode:     settings.ProxyMode,
+		TabVisibility:              settings.TabVisibility,
+		ProxyMode:                  settings.ProxyMode,
+		SuppressSystemFileWarnings: settings.SuppressSystemFileWarnings,
 	}
 }
 
-func (a *App) SaveSettings(tabVisibility map[string]bool, proxyMode bool) error {
+func (a *App) SaveSettings(tabVisibility map[string]bool, proxyMode bool, suppressSystemFileWarnings bool) error {
 	if a.settingsStore == nil {
 		return fmt.Errorf("settings store not initialized")
 	}
 	settings := &storage.Settings{
-		TabVisibility: storage.TabVisibility(tabVisibility),
-		ProxyMode:     proxyMode,
+		TabVisibility:              storage.TabVisibility(tabVisibility),
+		ProxyMode:                  proxyMode,
+		SuppressSystemFileWarnings: suppressSystemFileWarnings,
 	}
 	return a.settingsStore.Save(settings)
 }
@@ -2496,4 +2520,450 @@ func (a *App) UninstallVellum(removeAllPackages bool) {
 		a.vellumClient = nil
 		runtime.EventsEmit(a.ctx, "vellum:uninstall-complete")
 	}()
+}
+
+// isSystemPath returns true if the path is outside /home/root (a system path)
+func isSystemPath(path string) bool {
+	cleanPath := filepath.Clean(path)
+	return !strings.HasPrefix(cleanPath, "/home/root")
+}
+
+// makeFilesystemWritable makes the root filesystem writable on RMPP/RMPP-M devices
+func (a *App) makeFilesystemWritable(client *ssh.Client) error {
+	deviceType, err := a.detectDevice()
+	if err != nil {
+		return nil // If we can't detect, assume it's not RMPP
+	}
+
+	if deviceType != "rmpp" && deviceType != "rmppm" {
+		return nil // Only RMPP devices have read-only root
+	}
+
+	session, err := client.NewSession()
+	if err != nil {
+		return fmt.Errorf("failed to create session: %w", err)
+	}
+	defer session.Close()
+
+	// Remount root as rw and unmount /etc overlay
+	cmd := `mount -o remount,rw / 2>/dev/null; if grep -q '^overlay.*/etc' /proc/mounts; then umount -l /etc 2>/dev/null; fi`
+	if err := session.Run(cmd); err != nil {
+		return fmt.Errorf("failed to make filesystem writable: %w", err)
+	}
+
+	return nil
+}
+
+// restoreFilesystem restores the /etc overlay and remounts root as read-only on RMPP/RMPP-M
+func (a *App) restoreFilesystem(client *ssh.Client) error {
+	deviceType, err := a.detectDevice()
+	if err != nil {
+		return nil
+	}
+
+	if deviceType != "rmpp" && deviceType != "rmppm" {
+		return nil
+	}
+
+	session, err := client.NewSession()
+	if err != nil {
+		return fmt.Errorf("failed to create session: %w", err)
+	}
+	defer session.Close()
+
+	// Restore /etc overlay and remount root as ro
+	cmd := `if [ -d /var/volatile/.etc-work ]; then rm -rf /var/volatile/.etc-work/* 2>/dev/null; mount -t overlay overlay -o rw,relatime,lowerdir=/etc,upperdir=/var/volatile/etc,workdir=/var/volatile/.etc-work /etc 2>/dev/null; fi; sync; mount -o remount,ro / 2>/dev/null`
+	session.Run(cmd) // Best effort, don't fail if this errors
+
+	return nil
+}
+
+func (a *App) ListDirectory(path string) ([]FileInfo, error) {
+	a.mu.Lock()
+	client := a.client
+	a.mu.Unlock()
+
+	if client == nil {
+		return nil, fmt.Errorf("not connected")
+	}
+
+	if path == "" {
+		path = "/home/root"
+	}
+
+	sftpClient, err := sftp.NewClient(client)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create SFTP client: %w", err)
+	}
+	defer sftpClient.Close()
+
+	entries, err := sftpClient.ReadDir(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read directory: %w", err)
+	}
+
+	var files []FileInfo
+	for _, entry := range entries {
+		fullPath := filepath.Join(path, entry.Name())
+		if path == "/" {
+			fullPath = "/" + entry.Name()
+		}
+		files = append(files, FileInfo{
+			Name:    entry.Name(),
+			Path:    fullPath,
+			Size:    entry.Size(),
+			IsDir:   entry.IsDir(),
+			ModTime: entry.ModTime().Unix(),
+			Mode:    entry.Mode().String(),
+		})
+	}
+
+	sort.Slice(files, func(i, j int) bool {
+		if files[i].IsDir != files[j].IsDir {
+			return files[i].IsDir
+		}
+		return strings.ToLower(files[i].Name) < strings.ToLower(files[j].Name)
+	})
+
+	return files, nil
+}
+
+func (a *App) DownloadFile(remotePath string) {
+	go func() {
+		a.mu.Lock()
+		client := a.client
+		a.mu.Unlock()
+
+		if client == nil {
+			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
+				"message": "Not connected",
+			})
+			return
+		}
+
+		filename := filepath.Base(remotePath)
+		localPath, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+			DefaultFilename: filename,
+			Title:           "Save File",
+		})
+		if err != nil || localPath == "" {
+			return
+		}
+
+		sftpClient, err := sftp.NewClient(client)
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
+				"message": fmt.Sprintf("Failed to create SFTP client: %v", err),
+			})
+			return
+		}
+		defer sftpClient.Close()
+
+		remoteFile, err := sftpClient.Open(remotePath)
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
+				"message": fmt.Sprintf("Failed to open remote file: %v", err),
+			})
+			return
+		}
+		defer remoteFile.Close()
+
+		stat, err := remoteFile.Stat()
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
+				"message": fmt.Sprintf("Failed to stat remote file: %v", err),
+			})
+			return
+		}
+		totalBytes := stat.Size()
+
+		localFile, err := os.Create(localPath)
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
+				"message": fmt.Sprintf("Failed to create local file: %v", err),
+			})
+			return
+		}
+		defer localFile.Close()
+
+		buffer := make([]byte, 32*1024)
+		var transferred int64
+
+		for {
+			n, err := remoteFile.Read(buffer)
+			if n > 0 {
+				_, writeErr := localFile.Write(buffer[:n])
+				if writeErr != nil {
+					runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
+						"message": fmt.Sprintf("Failed to write to local file: %v", writeErr),
+					})
+					return
+				}
+				transferred += int64(n)
+
+				var percentage float64
+				if totalBytes > 0 {
+					percentage = float64(transferred) / float64(totalBytes) * 100
+				}
+				runtime.EventsEmit(a.ctx, "filebrowser:progress", TransferProgress{
+					Filename:   filename,
+					BytesSent:  transferred,
+					TotalBytes: totalBytes,
+					Percentage: percentage,
+					Status:     "downloading",
+				})
+			}
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
+					"message": fmt.Sprintf("Failed to read remote file: %v", err),
+				})
+				return
+			}
+		}
+
+		runtime.EventsEmit(a.ctx, "filebrowser:download-complete", map[string]string{
+			"path": remotePath,
+		})
+	}()
+}
+
+func (a *App) UploadFile(remotePath string) {
+	go func() {
+		a.mu.Lock()
+		client := a.client
+		a.mu.Unlock()
+
+		if client == nil {
+			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
+				"message": "Not connected",
+			})
+			return
+		}
+
+		localPath, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
+			Title: "Select File to Upload",
+		})
+		if err != nil || localPath == "" {
+			return
+		}
+
+		localFile, err := os.Open(localPath)
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
+				"message": fmt.Sprintf("Failed to open local file: %v", err),
+			})
+			return
+		}
+		defer localFile.Close()
+
+		stat, err := localFile.Stat()
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
+				"message": fmt.Sprintf("Failed to stat local file: %v", err),
+			})
+			return
+		}
+		totalBytes := stat.Size()
+		filename := stat.Name()
+
+		destPath := remotePath
+		if strings.HasSuffix(remotePath, "/") || remotePath == "" {
+			destPath = filepath.Join(remotePath, filename)
+		}
+
+		// Make filesystem writable for system paths on RMPP devices
+		if isSystemPath(destPath) {
+			if err := a.makeFilesystemWritable(client); err != nil {
+				runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
+					"message": fmt.Sprintf("Failed to prepare filesystem: %v", err),
+				})
+				return
+			}
+			defer a.restoreFilesystem(client)
+		}
+
+		sftpClient, err := sftp.NewClient(client)
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
+				"message": fmt.Sprintf("Failed to create SFTP client: %v", err),
+			})
+			return
+		}
+		defer sftpClient.Close()
+
+		remoteFile, err := sftpClient.Create(destPath)
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
+				"message": fmt.Sprintf("Failed to create remote file: %v", err),
+			})
+			return
+		}
+		defer remoteFile.Close()
+
+		buffer := make([]byte, 32*1024)
+		var transferred int64
+
+		for {
+			n, err := localFile.Read(buffer)
+			if n > 0 {
+				_, writeErr := remoteFile.Write(buffer[:n])
+				if writeErr != nil {
+					runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
+						"message": fmt.Sprintf("Failed to write to remote file: %v", writeErr),
+					})
+					return
+				}
+				transferred += int64(n)
+
+				var percentage float64
+				if totalBytes > 0 {
+					percentage = float64(transferred) / float64(totalBytes) * 100
+				}
+				runtime.EventsEmit(a.ctx, "filebrowser:progress", TransferProgress{
+					Filename:   filename,
+					BytesSent:  transferred,
+					TotalBytes: totalBytes,
+					Percentage: percentage,
+					Status:     "uploading",
+				})
+			}
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
+					"message": fmt.Sprintf("Failed to read local file: %v", err),
+				})
+				return
+			}
+		}
+
+		runtime.EventsEmit(a.ctx, "filebrowser:upload-complete", map[string]string{
+			"path": destPath,
+		})
+	}()
+}
+
+func (a *App) DeletePath(path string) error {
+	a.mu.Lock()
+	client := a.client
+	a.mu.Unlock()
+
+	if client == nil {
+		return fmt.Errorf("not connected")
+	}
+
+	// Make filesystem writable for system paths on RMPP devices
+	if isSystemPath(path) {
+		if err := a.makeFilesystemWritable(client); err != nil {
+			return err
+		}
+		defer a.restoreFilesystem(client)
+	}
+
+	sftpClient, err := sftp.NewClient(client)
+	if err != nil {
+		return fmt.Errorf("failed to create SFTP client: %w", err)
+	}
+	defer sftpClient.Close()
+
+	stat, err := sftpClient.Stat(path)
+	if err != nil {
+		return fmt.Errorf("failed to stat path: %w", err)
+	}
+
+	if stat.IsDir() {
+		entries, err := sftpClient.ReadDir(path)
+		if err != nil {
+			return fmt.Errorf("failed to read directory: %w", err)
+		}
+		if len(entries) > 0 {
+			session, err := client.NewSession()
+			if err != nil {
+				return fmt.Errorf("failed to create SSH session: %w", err)
+			}
+			defer session.Close()
+			_, err = session.CombinedOutput(fmt.Sprintf("rm -rf %q", path))
+			if err != nil {
+				return fmt.Errorf("failed to delete directory: %w", err)
+			}
+		} else {
+			err = sftpClient.RemoveDirectory(path)
+			if err != nil {
+				return fmt.Errorf("failed to remove directory: %w", err)
+			}
+		}
+	} else {
+		err = sftpClient.Remove(path)
+		if err != nil {
+			return fmt.Errorf("failed to delete file: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func (a *App) RenamePath(oldPath, newPath string) error {
+	a.mu.Lock()
+	client := a.client
+	a.mu.Unlock()
+
+	if client == nil {
+		return fmt.Errorf("not connected")
+	}
+
+	// Make filesystem writable for system paths on RMPP devices
+	if isSystemPath(oldPath) || isSystemPath(newPath) {
+		if err := a.makeFilesystemWritable(client); err != nil {
+			return err
+		}
+		defer a.restoreFilesystem(client)
+	}
+
+	sftpClient, err := sftp.NewClient(client)
+	if err != nil {
+		return fmt.Errorf("failed to create SFTP client: %w", err)
+	}
+	defer sftpClient.Close()
+
+	err = sftpClient.Rename(oldPath, newPath)
+	if err != nil {
+		return fmt.Errorf("failed to rename: %w", err)
+	}
+
+	return nil
+}
+
+func (a *App) CreateDirectory(path string) error {
+	a.mu.Lock()
+	client := a.client
+	a.mu.Unlock()
+
+	if client == nil {
+		return fmt.Errorf("not connected")
+	}
+
+	// Make filesystem writable for system paths on RMPP devices
+	if isSystemPath(path) {
+		if err := a.makeFilesystemWritable(client); err != nil {
+			return err
+		}
+		defer a.restoreFilesystem(client)
+	}
+
+	sftpClient, err := sftp.NewClient(client)
+	if err != nil {
+		return fmt.Errorf("failed to create SFTP client: %w", err)
+	}
+	defer sftpClient.Close()
+
+	err = sftpClient.Mkdir(path)
+	if err != nil {
+		return fmt.Errorf("failed to create directory: %w", err)
+	}
+
+	return nil
 }

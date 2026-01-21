@@ -14,7 +14,8 @@ interface SettingsDialogProps {
   vellumInstalled: boolean | null
   tabVisibility: Record<string, boolean>
   proxyMode: boolean
-  onSaveSettings: (tabVisibility: Record<string, boolean>, proxyMode: boolean) => void
+  suppressSystemFileWarnings: boolean
+  onSaveSettings: (tabVisibility: Record<string, boolean>, proxyMode: boolean, suppressSystemFileWarnings: boolean) => void
   onUninstallVellum: (removeAllPackages: boolean) => void
   uninstalling: boolean
   uninstallOutput: string
@@ -28,6 +29,7 @@ export function SettingsDialog({
   vellumInstalled,
   tabVisibility,
   proxyMode,
+  suppressSystemFileWarnings,
   onSaveSettings,
   onUninstallVellum,
   uninstalling,
@@ -38,6 +40,7 @@ export function SettingsDialog({
 
   const [localTabVisibility, setLocalTabVisibility] = useState({ ...defaultTabVisibility, ...tabVisibility })
   const [localProxyMode, setLocalProxyMode] = useState(proxyMode)
+  const [localSuppressSystemFileWarnings, setLocalSuppressSystemFileWarnings] = useState(suppressSystemFileWarnings)
   const [showUninstallConfirm, setShowUninstallConfirm] = useState(false)
   const [removePackages, setRemovePackages] = useState(true)
 
@@ -45,18 +48,20 @@ export function SettingsDialog({
     if (open) {
       setLocalTabVisibility({ ...defaultTabVisibility, ...tabVisibility })
       setLocalProxyMode(proxyMode)
+      setLocalSuppressSystemFileWarnings(suppressSystemFileWarnings)
     }
-  }, [open, tabVisibility, proxyMode])
+  }, [open, tabVisibility, proxyMode, suppressSystemFileWarnings])
 
   const handleCancel = () => {
     setLocalTabVisibility({ ...defaultTabVisibility, ...tabVisibility })
     setLocalProxyMode(proxyMode)
+    setLocalSuppressSystemFileWarnings(suppressSystemFileWarnings)
     setShowUninstallConfirm(false)
     onOpenChange(false)
   }
 
   const handleSave = () => {
-    onSaveSettings(localTabVisibility, localProxyMode)
+    onSaveSettings(localTabVisibility, localProxyMode, localSuppressSystemFileWarnings)
     onOpenChange(false)
   }
 
@@ -65,6 +70,7 @@ export function SettingsDialog({
       setShowUninstallConfirm(false)
       setLocalTabVisibility({ ...defaultTabVisibility, ...tabVisibility })
       setLocalProxyMode(proxyMode)
+      setLocalSuppressSystemFileWarnings(suppressSystemFileWarnings)
     }
     onOpenChange(newOpen)
   }
@@ -122,6 +128,31 @@ export function SettingsDialog({
                   id="proxy-mode"
                   checked={localProxyMode}
                   onCheckedChange={setLocalProxyMode}
+                />
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm">System File Warnings</CardTitle>
+              <CardDescription className="text-xs">
+                Show confirmation dialogs when modifying files in the system partition in the file browser.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <Label htmlFor="suppress-sys-warnings" className="font-normal">Suppress Warnings</Label>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Disabling warnings can lead to accidental modification of critical system files,
+                    potentially making your device unbootable. Only disable if you are experienced with Linux systems.
+                  </p>
+                </div>
+                <Switch
+                  id="suppress-sys-warnings"
+                  checked={localSuppressSystemFileWarnings}
+                  onCheckedChange={setLocalSuppressSystemFileWarnings}
                 />
               </div>
             </CardContent>

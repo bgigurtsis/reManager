@@ -16,6 +16,7 @@ import { UpgradeChecklist } from '@/components/UpgradeChecklist'
 import { VellumInstallPrompt } from '@/components/VellumInstallPrompt'
 import { SettingsDialog } from '@/components/SettingsDialog'
 import { InteractiveTerminal } from '@/components/InteractiveTerminal'
+import { FileBrowser } from '@/components/FileBrowser'
 import { DnsErrorModal } from '@/components/DnsErrorModal'
 import { TimezoneCombobox } from '@/components/TimezoneCombobox'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
@@ -185,13 +186,19 @@ declare global {
           RespondToDialog(confirmed: boolean): Promise<void>
           CancelInstallation(): Promise<void>
           GetAppVersion(): Promise<string>
-          GetSettings(): Promise<{ tabVisibility: Record<string, boolean>; proxyMode: boolean }>
-          SaveSettings(tabVisibility: Record<string, boolean>, proxyMode: boolean): Promise<void>
+          GetSettings(): Promise<{ tabVisibility: Record<string, boolean>; proxyMode: boolean; suppressSystemFileWarnings: boolean }>
+          SaveSettings(tabVisibility: Record<string, boolean>, proxyMode: boolean, suppressSystemFileWarnings: boolean): Promise<void>
           UninstallVellum(removeAllPackages: boolean): Promise<void>
           GetDeviceTimezone(): Promise<string>
           GetTimezoneStatus(): Promise<TimezoneStatus>
           SaveDeviceTimezone(timezone: string): Promise<void>
           SetDeviceTimezone(timezone: string, deviceType: string): Promise<void>
+          ListDirectory(path: string): Promise<{ name: string; path: string; size: number; isDir: boolean; modTime: number; mode: string }[]>
+          DownloadFile(remotePath: string): void
+          UploadFile(remotePath: string): void
+          DeletePath(path: string): Promise<void>
+          RenamePath(oldPath: string, newPath: string): Promise<void>
+          CreateDirectory(path: string): Promise<void>
         }
       }
     }
@@ -271,6 +278,7 @@ export default function App() {
     utilities: true,
   })
   const [proxyMode, setProxyMode] = useState(true)
+  const [suppressSystemFileWarnings, setSuppressSystemFileWarnings] = useState(false)
   const [dnsErrorShown, setDnsErrorShown] = useState(false)
   const [showDnsErrorModal, setShowDnsErrorModal] = useState(false)
   const [vellumUninstalling, setVellumUninstalling] = useState(false)
@@ -458,6 +466,7 @@ export default function App() {
         setAppVersion(version || 'dev')
         setTabVisibility(settings?.tabVisibility || { mods: true, maintenance: true, utilities: true })
         setProxyMode(settings?.proxyMode ?? true)
+        setSuppressSystemFileWarnings(settings?.suppressSystemFileWarnings ?? false)
       } catch (err) {
         console.log('Could not load initial data:', err)
         setSelectedKey('__other__')
@@ -1179,15 +1188,16 @@ export default function App() {
     setSavedDevices(devices || [])
   }
 
-  const handleSaveSettings = async (newTabVisibility: Record<string, boolean>, newProxyMode: boolean) => {
+  const handleSaveSettings = async (newTabVisibility: Record<string, boolean>, newProxyMode: boolean, newSuppressSystemFileWarnings: boolean) => {
     setTabVisibility(newTabVisibility)
     setProxyMode(newProxyMode)
-    await window.go.main.App.SaveSettings(newTabVisibility, newProxyMode)
+    setSuppressSystemFileWarnings(newSuppressSystemFileWarnings)
+    await window.go.main.App.SaveSettings(newTabVisibility, newProxyMode, newSuppressSystemFileWarnings)
   }
 
   const handleEnableProxyModeFromModal = async () => {
     setProxyMode(true)
-    await window.go.main.App.SaveSettings(tabVisibility, true)
+    await window.go.main.App.SaveSettings(tabVisibility, true, suppressSystemFileWarnings)
     setShowDnsErrorModal(false)
   }
 
@@ -2463,18 +2473,29 @@ export default function App() {
 
             {tabVisibility.utilities && (
               <TabsContent value="utilities" forceMount className={activeTab === 'utilities' ? '' : 'hidden'}>
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Terminal</CardTitle>
-                    <CardDescription>Interactive SSH shell to your reMarkable</CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <InteractiveTerminal
-                      isConnected={connectionStatus === 'connected'}
-                      visible={activeTab === 'utilities'}
-                    />
-                  </CardContent>
-                </Card>
+                <div className="space-y-4">
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>File Browser</CardTitle>
+                      <CardDescription>Browse and transfer files on your reMarkable</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <FileBrowser isConnected={connectionStatus === 'connected'} suppressSystemFileWarnings={suppressSystemFileWarnings} />
+                    </CardContent>
+                  </Card>
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>Terminal</CardTitle>
+                      <CardDescription>Interactive SSH shell to your reMarkable</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <InteractiveTerminal
+                        isConnected={connectionStatus === 'connected'}
+                        visible={activeTab === 'utilities'}
+                      />
+                    </CardContent>
+                  </Card>
+                </div>
               </TabsContent>
             )}
           </Tabs>
@@ -2907,6 +2928,7 @@ export default function App() {
         vellumInstalled={vellumInstalled}
         tabVisibility={tabVisibility}
         proxyMode={proxyMode}
+        suppressSystemFileWarnings={suppressSystemFileWarnings}
         onSaveSettings={handleSaveSettings}
         onUninstallVellum={handleUninstallVellum}
         uninstalling={vellumUninstalling}
