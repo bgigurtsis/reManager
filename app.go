@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"sort"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/pkg/sftp"
+	"github.com/rymdport/portal/filechooser"
 	"github.com/skratchdot/open-golang/open"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 	"golang.org/x/crypto/ssh"
@@ -41,6 +43,55 @@ func debugln(args ...interface{}) {
 	if debugMode {
 		fmt.Println(args...)
 	}
+}
+
+func isRunningInFlatpak() bool {
+	_, err := os.Stat("/.flatpak-info")
+	return err == nil
+}
+
+func openFileDialog(ctx context.Context, title string) (string, error) {
+	if isRunningInFlatpak() {
+		home, _ := os.UserHomeDir()
+		files, err := filechooser.OpenFile("", title, &filechooser.OpenFileOptions{
+			CurrentFolder: home,
+		})
+		if err != nil {
+			return "", err
+		}
+		if len(files) == 0 {
+			return "", nil
+		}
+		return strings.TrimPrefix(files[0], "file://"), nil
+	}
+	home, _ := os.UserHomeDir()
+	return runtime.OpenFileDialog(ctx, runtime.OpenDialogOptions{
+		Title:            title,
+		DefaultDirectory: home,
+	})
+}
+
+func saveFileDialog(ctx context.Context, title, defaultFilename string) (string, error) {
+	if isRunningInFlatpak() {
+		home, _ := os.UserHomeDir()
+		files, err := filechooser.SaveFile("", title, &filechooser.SaveFileOptions{
+			CurrentFolder: home,
+			CurrentName:   defaultFilename,
+		})
+		if err != nil {
+			return "", err
+		}
+		if len(files) == 0 {
+			return "", nil
+		}
+		return strings.TrimPrefix(files[0], "file://"), nil
+	}
+	home, _ := os.UserHomeDir()
+	return runtime.SaveFileDialog(ctx, runtime.SaveDialogOptions{
+		Title:            title,
+		DefaultFilename:  defaultFilename,
+		DefaultDirectory: home,
+	})
 }
 
 func sanitizeFilename(name string) string {
@@ -141,9 +192,7 @@ func (a *App) GetDefaultSSHKeys() []SSHKey {
 }
 
 func (a *App) SelectKeyFile() string {
-	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
-		Title: "Select SSH Private Key",
-	})
+	path, err := openFileDialog(a.ctx, "Select SSH Private Key")
 	if err != nil {
 		return ""
 	}
@@ -2658,10 +2707,7 @@ func (a *App) DownloadFile(remotePath string) {
 		}
 
 		filename := path.Base(remotePath)
-		localPath, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
-			DefaultFilename: filename,
-			Title:           "Save File",
-		})
+		localPath, err := saveFileDialog(a.ctx, "Save File", filename)
 		if err != nil || localPath == "" {
 			return
 		}
@@ -2759,9 +2805,7 @@ func (a *App) UploadFile(remotePath string) {
 			return
 		}
 
-		localPath, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
-			Title: "Select File to Upload",
-		})
+		localPath, err := openFileDialog(a.ctx, "Select File to Upload")
 		if err != nil || localPath == "" {
 			return
 		}
@@ -3228,10 +3272,8 @@ func (a *App) CreateDeviceBackup() {
 		}
 
 		timestamp := time.Now().Format("2006-01-02-150405")
-		destPath, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
-			DefaultFilename: fmt.Sprintf("remarkable-backup-%s-%s.tar.zst", deviceName, timestamp),
-			Title:           "Save Backup",
-		})
+		defaultName := fmt.Sprintf("remarkable-backup-%s-%s.tar.zst", deviceName, timestamp)
+		destPath, err := saveFileDialog(a.ctx, "Save Backup", defaultName)
 		if err != nil || destPath == "" {
 			return
 		}
@@ -3287,9 +3329,7 @@ func (a *App) CreateDeviceBackup() {
 }
 
 func (a *App) SelectRestoreFile() string {
-	archivePath, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
-		Title: "Select Backup to Restore",
-	})
+	archivePath, err := openFileDialog(a.ctx, "Select Backup to Restore")
 	if err != nil || archivePath == "" {
 		return ""
 	}
@@ -3382,5 +3422,13 @@ func (a *App) CancelBackup() {
 
 func (a *App) RevealInFileManager(path string) {
 	dir := filepath.Dir(path)
+
+	// Check if running in Flatpak (/.flatpak-info exists)
+	if _, err := os.Stat("/.flatpak-info"); err == nil {
+		// Use xdg-open through flatpak-spawn to open on host
+		exec.Command("flatpak-spawn", "--host", "xdg-open", dir).Start()
+		return
+	}
+
 	open.Start(dir)
 }

@@ -361,6 +361,13 @@ github.com/pterm/pterm/internal
 # github.com/rivo/uniseg v0.4.7
 ## explicit; go 1.18
 github.com/rivo/uniseg
+# github.com/rymdport/portal v0.4.2
+## explicit; go 1.19
+github.com/rymdport/portal
+github.com/rymdport/portal/filechooser
+github.com/rymdport/portal/internal/apis
+github.com/rymdport/portal/internal/convert
+github.com/rymdport/portal/internal/request
 # github.com/sabhiram/go-gitignore v0.0.0-20210923224102-525f6e181f06
 ## explicit; go 1.13
 github.com/sabhiram/go-gitignore

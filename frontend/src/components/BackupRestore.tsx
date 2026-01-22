@@ -380,7 +380,7 @@ export function BackupRestoreDialog({ mode, onClose }: BackupRestoreDialogProps)
                           onClick={() => window.go.main.App.RevealInFileManager(finalStats.path!)}
                           className="text-sm text-primary underline-offset-4 hover:underline text-left truncate w-full"
                         >
-                          Saved to: {finalStats.path}
+                          Saved: {finalStats.path.split(/[/\\]/).pop()}
                         </button>
                       </TooltipTrigger>
                       <TooltipContent>Click to open folder</TooltipContent>
