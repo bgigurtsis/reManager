@@ -22,12 +22,6 @@ jobs:
           arch: x86_64
           cache-key: flatpak-builder-x86_64-${{ github.sha }}
 
-      - name: Upload Flatpak
-        uses: actions/upload-artifact@v4
-        with:
-          name: reManager-x86_64
-          path: reManager-x86_64.flatpak
-
   build-aarch64:
     name: Build Flatpak (aarch64)
     runs-on: ubuntu-24.04-arm
@@ -45,9 +39,3 @@ jobs:
           manifest-path: flatpak/io.scottlabs.reManager.yml
           arch: aarch64
           cache-key: flatpak-builder-aarch64-${{ github.sha }}
-
-      - name: Upload Flatpak
-        uses: actions/upload-artifact@v4
-        with:
-          name: reManager-aarch64
-          path: reManager-aarch64.flatpak
