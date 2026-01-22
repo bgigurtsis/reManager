@@ -262,6 +262,15 @@ github.com/jchv/go-winloader/internal/winloader
 # github.com/kevinburke/ssh_config v1.2.0
 ## explicit
 github.com/kevinburke/ssh_config
+# github.com/klauspost/compress v1.17.11
+## explicit; go 1.21
+github.com/klauspost/compress
+github.com/klauspost/compress/fse
+github.com/klauspost/compress/huff0
+github.com/klauspost/compress/internal/cpuinfo
+github.com/klauspost/compress/internal/snapref
+github.com/klauspost/compress/zstd
+github.com/klauspost/compress/zstd/internal/xxhash
 # github.com/kr/fs v0.1.0
 ## explicit
 github.com/kr/fs
@@ -367,6 +376,9 @@ github.com/sergi/go-diff/diffmatchpatch
 # github.com/skeema/knownhosts v1.3.0
 ## explicit; go 1.17
 github.com/skeema/knownhosts
+# github.com/skratchdot/open-golang v0.0.0-20200116055534-eef842397966
+## explicit
+github.com/skratchdot/open-golang/open
 # github.com/spf13/cobra v1.10.2
 ## explicit; go 1.15
 github.com/spf13/cobra
@@ -596,6 +608,9 @@ golang.org/x/tools/internal/stdlib
 golang.org/x/tools/internal/typeparams
 golang.org/x/tools/internal/typesinternal
 golang.org/x/tools/internal/versions
+# gopkg.in/ini.v1 v1.67.1
+## explicit; go 1.13
+gopkg.in/ini.v1
 # gopkg.in/warnings.v0 v0.1.2
 ## explicit
 gopkg.in/warnings.v0

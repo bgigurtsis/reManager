@@ -15,6 +15,7 @@ finish-args:
   - --share=network
   - --filesystem=~/.ssh:ro
   - --talk-name=org.freedesktop.secrets
+  - --talk-name=org.freedesktop.Flatpak
 
 build-options:
   append-path: /usr/lib/sdk/golang/bin:/usr/lib/sdk/node20/bin:/tmp/go/bin

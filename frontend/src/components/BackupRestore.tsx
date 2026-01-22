@@ -93,13 +93,13 @@ export function BackupRestoreDialog({ mode, onClose }: BackupRestoreDialogProps)
       case 'scanning':
         return 'Scanning reMarkable files...'
       case 'downloading':
-        return 'Downloading from reMarkable...'
+        return 'Downloading from reMarkable tablet...'
       case 'archiving':
         return 'Creating archive...'
       case 'extracting':
         return 'Extracting backup...'
       case 'uploading':
-        return 'Uploading to reMarkable...'
+        return 'Uploading to reMarkable tablet...'
       case 'complete':
         return 'Complete'
       default:
