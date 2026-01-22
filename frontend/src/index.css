@@ -3,6 +3,10 @@
 
 @plugin "tailwindcss-animate";
 
+input::-ms-reveal {
+  display: none;
+}
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {

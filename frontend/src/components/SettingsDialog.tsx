@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Loader2, AlertTriangle } from 'lucide-react'
 import { TerminalWithCopy } from '@/components/TerminalWithCopy'
 
@@ -15,7 +16,8 @@ interface SettingsDialogProps {
   tabVisibility: Record<string, boolean>
   proxyMode: boolean
   suppressSystemFileWarnings: boolean
-  onSaveSettings: (tabVisibility: Record<string, boolean>, proxyMode: boolean, suppressSystemFileWarnings: boolean) => void
+  theme: string
+  onSaveSettings: (tabVisibility: Record<string, boolean>, proxyMode: boolean, suppressSystemFileWarnings: boolean, theme: string) => void
   onUninstallVellum: (removeAllPackages: boolean) => void
   uninstalling: boolean
   uninstallOutput: string
@@ -30,6 +32,7 @@ export function SettingsDialog({
   tabVisibility,
   proxyMode,
   suppressSystemFileWarnings,
+  theme,
   onSaveSettings,
   onUninstallVellum,
   uninstalling,
@@ -41,12 +44,14 @@ export function SettingsDialog({
   const [localTabVisibility, setLocalTabVisibility] = useState({ ...defaultTabVisibility, ...tabVisibility })
   const [localProxyMode, setLocalProxyMode] = useState(proxyMode)
   const [localSuppressSystemFileWarnings, setLocalSuppressSystemFileWarnings] = useState(suppressSystemFileWarnings)
+  const [localTheme, setLocalTheme] = useState(theme)
   const [showUninstallConfirm, setShowUninstallConfirm] = useState(false)
   const [removePackages, setRemovePackages] = useState(true)
 
   const hasChanges =
     localProxyMode !== proxyMode ||
     localSuppressSystemFileWarnings !== suppressSystemFileWarnings ||
+    localTheme !== theme ||
     JSON.stringify(localTabVisibility) !== JSON.stringify({ ...defaultTabVisibility, ...tabVisibility })
 
   useEffect(() => {
@@ -54,19 +59,21 @@ export function SettingsDialog({
       setLocalTabVisibility({ ...defaultTabVisibility, ...tabVisibility })
       setLocalProxyMode(proxyMode)
       setLocalSuppressSystemFileWarnings(suppressSystemFileWarnings)
+      setLocalTheme(theme)
     }
-  }, [open, tabVisibility, proxyMode, suppressSystemFileWarnings])
+  }, [open, tabVisibility, proxyMode, suppressSystemFileWarnings, theme])
 
   const handleCancel = () => {
     setLocalTabVisibility({ ...defaultTabVisibility, ...tabVisibility })
     setLocalProxyMode(proxyMode)
     setLocalSuppressSystemFileWarnings(suppressSystemFileWarnings)
+    setLocalTheme(theme)
     setShowUninstallConfirm(false)
     onOpenChange(false)
   }
 
   const handleSave = () => {
-    onSaveSettings(localTabVisibility, localProxyMode, localSuppressSystemFileWarnings)
+    onSaveSettings(localTabVisibility, localProxyMode, localSuppressSystemFileWarnings, localTheme)
     onOpenChange(false)
   }
 
@@ -76,6 +83,7 @@ export function SettingsDialog({
       setLocalTabVisibility({ ...defaultTabVisibility, ...tabVisibility })
       setLocalProxyMode(proxyMode)
       setLocalSuppressSystemFileWarnings(suppressSystemFileWarnings)
+      setLocalTheme(theme)
     }
     onOpenChange(newOpen)
   }
@@ -93,14 +101,27 @@ export function SettingsDialog({
         <div className="space-y-6 flex-1 overflow-y-auto">
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-sm">Tab Visibility</CardTitle>
+              <CardTitle className="text-base">Appearance</CardTitle>
               <CardDescription className="text-xs">
-                Choose which tabs to show in the app
+                Customize the look of reManager
               </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-3">
+            <CardContent className="space-y-4">
+              <div className="flex items-center justify-between gap-4">
+                <Label htmlFor="theme-select" className="font-normal">Theme</Label>
+                <Select value={localTheme} onValueChange={setLocalTheme}>
+                  <SelectTrigger id="theme-select" className="w-32">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="light">Light</SelectItem>
+                    <SelectItem value="dark">Dark</SelectItem>
+                    <SelectItem value="system">System</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
               <div className="flex items-center justify-between">
-                <Label htmlFor="tab-mods" className="font-normal">Mods</Label>
+                <Label htmlFor="tab-mods" className="font-normal">Show Mods Tab</Label>
                 <Switch
                   id="tab-mods"
                   checked={localTabVisibility.mods}
@@ -108,7 +129,7 @@ export function SettingsDialog({
                 />
               </div>
               <div className="flex items-center justify-between">
-                <Label htmlFor="tab-utilities" className="font-normal">Utilities</Label>
+                <Label htmlFor="tab-utilities" className="font-normal">Show Utilities Tab</Label>
                 <Switch
                   id="tab-utilities"
                   checked={localTabVisibility.utilities}
@@ -120,7 +141,7 @@ export function SettingsDialog({
 
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-sm">Behavior</CardTitle>
+              <CardTitle className="text-base">Behavior</CardTitle>
               <CardDescription className="text-xs">
                 Configure how reManager operates
               </CardDescription>
@@ -160,7 +181,7 @@ export function SettingsDialog({
           {isConnected && vellumInstalled && (
             <Card className="border-destructive/50">
               <CardHeader className="pb-3">
-                <CardTitle className="text-sm">Uninstall</CardTitle>
+                <CardTitle className="text-base">Uninstall</CardTitle>
                 <CardDescription className="text-xs">
                   Remove the Vellum package manager from your reMarkable.
                   <br />

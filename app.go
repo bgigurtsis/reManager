@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -2472,6 +2473,7 @@ type SettingsInfo struct {
 	TabVisibility              map[string]bool `json:"tabVisibility"`
 	ProxyMode                  bool            `json:"proxyMode"`
 	SuppressSystemFileWarnings bool            `json:"suppressSystemFileWarnings"`
+	Theme                      string          `json:"theme"`
 }
 
 func (a *App) GetSettings() SettingsInfo {
@@ -2480,6 +2482,7 @@ func (a *App) GetSettings() SettingsInfo {
 			TabVisibility:              map[string]bool{"mods": true, "maintenance": true, "utilities": true},
 			ProxyMode:                  true,
 			SuppressSystemFileWarnings: false,
+			Theme:                      "system",
 		}
 	}
 	settings, err := a.settingsStore.Load()
@@ -2488,16 +2491,18 @@ func (a *App) GetSettings() SettingsInfo {
 			TabVisibility:              map[string]bool{"mods": true, "maintenance": true, "utilities": true},
 			ProxyMode:                  true,
 			SuppressSystemFileWarnings: false,
+			Theme:                      "system",
 		}
 	}
 	return SettingsInfo{
 		TabVisibility:              settings.TabVisibility,
 		ProxyMode:                  settings.ProxyMode,
 		SuppressSystemFileWarnings: settings.SuppressSystemFileWarnings,
+		Theme:                      settings.Theme,
 	}
 }
 
-func (a *App) SaveSettings(tabVisibility map[string]bool, proxyMode bool, suppressSystemFileWarnings bool) error {
+func (a *App) SaveSettings(tabVisibility map[string]bool, proxyMode bool, suppressSystemFileWarnings bool, theme string) error {
 	if a.settingsStore == nil {
 		return fmt.Errorf("settings store not initialized")
 	}
@@ -2505,6 +2510,7 @@ func (a *App) SaveSettings(tabVisibility map[string]bool, proxyMode bool, suppre
 		TabVisibility:              storage.TabVisibility(tabVisibility),
 		ProxyMode:                  proxyMode,
 		SuppressSystemFileWarnings: suppressSystemFileWarnings,
+		Theme:                      theme,
 	}
 	return a.settingsStore.Save(settings)
 }
@@ -2588,7 +2594,7 @@ func (a *App) restoreFilesystem(client *ssh.Client) error {
 	return nil
 }
 
-func (a *App) ListDirectory(path string) ([]FileInfo, error) {
+func (a *App) ListDirectory(dirPath string) ([]FileInfo, error) {
 	a.mu.Lock()
 	client := a.client
 	a.mu.Unlock()
@@ -2597,8 +2603,8 @@ func (a *App) ListDirectory(path string) ([]FileInfo, error) {
 		return nil, fmt.Errorf("not connected")
 	}
 
-	if path == "" {
-		path = "/home/root"
+	if dirPath == "" {
+		dirPath = "/home/root"
 	}
 
 	sftpClient, err := sftp.NewClient(client)
@@ -2607,15 +2613,15 @@ func (a *App) ListDirectory(path string) ([]FileInfo, error) {
 	}
 	defer sftpClient.Close()
 
-	entries, err := sftpClient.ReadDir(path)
+	entries, err := sftpClient.ReadDir(dirPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read directory: %w", err)
 	}
 
 	var files []FileInfo
 	for _, entry := range entries {
-		fullPath := filepath.Join(path, entry.Name())
-		if path == "/" {
+		fullPath := path.Join(dirPath, entry.Name())
+		if dirPath == "/" {
 			fullPath = "/" + entry.Name()
 		}
 		files = append(files, FileInfo{
@@ -2651,7 +2657,7 @@ func (a *App) DownloadFile(remotePath string) {
 			return
 		}
 
-		filename := filepath.Base(remotePath)
+		filename := path.Base(remotePath)
 		localPath, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
 			DefaultFilename: filename,
 			Title:           "Save File",
@@ -2781,7 +2787,7 @@ func (a *App) UploadFile(remotePath string) {
 
 		destPath := remotePath
 		if strings.HasSuffix(remotePath, "/") || remotePath == "" {
-			destPath = filepath.Join(remotePath, filename)
+			destPath = path.Join(remotePath, filename)
 		}
 
 		// Make filesystem writable for system paths on RMPP devices
@@ -3089,7 +3095,7 @@ func (a *App) BackupConfigFile() (string, error) {
 	}
 
 	backupName := fmt.Sprintf("xochitl.conf.backup-%s", time.Now().Format("2006-01-02-150405"))
-	backupPath := filepath.Join("/home/root/.config/remarkable", backupName)
+	backupPath := path.Join("/home/root/.config/remarkable", backupName)
 
 	backupFile, err := sftpClient.Create(backupPath)
 	if err != nil {
@@ -3166,7 +3172,7 @@ func (a *App) RestoreConfigBackup(backupName string) error {
 	}
 	defer sftpClient.Close()
 
-	backupPath := filepath.Join("/home/root/.config/remarkable", backupName)
+	backupPath := path.Join("/home/root/.config/remarkable", backupName)
 	debugln("RestoreConfigBackup: opening backup file:", backupPath)
 	file, err := sftpClient.Open(backupPath)
 	if err != nil {

@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
+import { applyTheme } from './main'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -188,8 +189,8 @@ declare global {
           RespondToDialog(confirmed: boolean): Promise<void>
           CancelInstallation(): Promise<void>
           GetAppVersion(): Promise<string>
-          GetSettings(): Promise<{ tabVisibility: Record<string, boolean>; proxyMode: boolean; suppressSystemFileWarnings: boolean }>
-          SaveSettings(tabVisibility: Record<string, boolean>, proxyMode: boolean, suppressSystemFileWarnings: boolean): Promise<void>
+          GetSettings(): Promise<{ tabVisibility: Record<string, boolean>; proxyMode: boolean; suppressSystemFileWarnings: boolean; theme: string }>
+          SaveSettings(tabVisibility: Record<string, boolean>, proxyMode: boolean, suppressSystemFileWarnings: boolean, theme: string): Promise<void>
           UninstallVellum(removeAllPackages: boolean): Promise<void>
           GetDeviceTimezone(): Promise<string>
           GetTimezoneStatus(): Promise<TimezoneStatus>
@@ -295,6 +296,7 @@ export default function App() {
   })
   const [proxyMode, setProxyMode] = useState(true)
   const [suppressSystemFileWarnings, setSuppressSystemFileWarnings] = useState(false)
+  const [theme, setTheme] = useState('system')
   const [dnsErrorShown, setDnsErrorShown] = useState(false)
   const [showDnsErrorModal, setShowDnsErrorModal] = useState(false)
   const [vellumUninstalling, setVellumUninstalling] = useState(false)
@@ -483,6 +485,9 @@ export default function App() {
         setTabVisibility(settings?.tabVisibility || { mods: true, maintenance: true, utilities: true })
         setProxyMode(settings?.proxyMode ?? true)
         setSuppressSystemFileWarnings(settings?.suppressSystemFileWarnings ?? false)
+        const loadedTheme = settings?.theme || 'system'
+        setTheme(loadedTheme)
+        localStorage.setItem('theme', loadedTheme)
       } catch (err) {
         console.log('Could not load initial data:', err)
         setSelectedKey('__other__')
@@ -1204,16 +1209,19 @@ export default function App() {
     setSavedDevices(devices || [])
   }
 
-  const handleSaveSettings = async (newTabVisibility: Record<string, boolean>, newProxyMode: boolean, newSuppressSystemFileWarnings: boolean) => {
+  const handleSaveSettings = async (newTabVisibility: Record<string, boolean>, newProxyMode: boolean, newSuppressSystemFileWarnings: boolean, newTheme: string) => {
     setTabVisibility(newTabVisibility)
     setProxyMode(newProxyMode)
     setSuppressSystemFileWarnings(newSuppressSystemFileWarnings)
-    await window.go.main.App.SaveSettings(newTabVisibility, newProxyMode, newSuppressSystemFileWarnings)
+    setTheme(newTheme)
+    localStorage.setItem('theme', newTheme)
+    applyTheme(newTheme)
+    await window.go.main.App.SaveSettings(newTabVisibility, newProxyMode, newSuppressSystemFileWarnings, newTheme)
   }
 
   const handleEnableProxyModeFromModal = async () => {
     setProxyMode(true)
-    await window.go.main.App.SaveSettings(tabVisibility, true, suppressSystemFileWarnings)
+    await window.go.main.App.SaveSettings(tabVisibility, true, suppressSystemFileWarnings, theme)
     setShowDnsErrorModal(false)
   }
 
@@ -2999,6 +3007,7 @@ export default function App() {
         tabVisibility={tabVisibility}
         proxyMode={proxyMode}
         suppressSystemFileWarnings={suppressSystemFileWarnings}
+        theme={theme}
         onSaveSettings={handleSaveSettings}
         onUninstallVellum={handleUninstallVellum}
         uninstalling={vellumUninstalling}
