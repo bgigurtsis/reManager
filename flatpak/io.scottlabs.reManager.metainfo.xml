@@ -30,6 +30,9 @@
     </screenshot>
   </screenshots>
   <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="1.0.1" date="2026-01-22"/>
+  </releases>
   <branding>
     <color type="primary" scheme_preference="light">#f5f5f5</color>
     <color type="primary" scheme_preference="dark">#1a1a1a</color>
