@@ -15,10 +15,12 @@ import (
 	"time"
 
 	"github.com/pkg/sftp"
+	"github.com/skratchdot/open-golang/open"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 	"golang.org/x/crypto/ssh"
 	"gopkg.in/ini.v1"
 
+	"reManager/internal/backup"
 	"reManager/internal/commands"
 	"reManager/internal/component"
 	"reManager/internal/device"
@@ -38,6 +40,11 @@ func debugln(args ...interface{}) {
 	if debugMode {
 		fmt.Println(args...)
 	}
+}
+
+func sanitizeFilename(name string) string {
+	replacer := strings.NewReplacer("/", "_", "\\", "_", ":", "_", " ", "-", "<", "_", ">", "_", "\"", "_", "|", "_", "?", "_", "*", "_")
+	return replacer.Replace(name)
 }
 
 type App struct {
@@ -61,6 +68,8 @@ type App struct {
 	reconnectMu       sync.Mutex
 	fastDialMode      bool
 	installCancelCh   chan struct{}
+	backupCancelCh    chan struct{}
+	backupMu          sync.Mutex
 
 	shellSession *ssh.Session
 	shellStdin   io.WriteCloser
@@ -3187,4 +3196,185 @@ func (a *App) RestoreConfigBackup(backupName string) error {
 		debugln("RestoreConfigBackup: success")
 	}
 	return err
+}
+
+func (a *App) CreateDeviceBackup() {
+	go func() {
+		a.mu.Lock()
+		client := a.client
+		deviceID := a.connectedDeviceID
+		a.mu.Unlock()
+
+		if client == nil {
+			runtime.EventsEmit(a.ctx, "backup:error", map[string]string{
+				"message": "Not connected to device",
+			})
+			return
+		}
+
+		rawDeviceName := ""
+		if savedDevice, err := a.deviceStore.Get(deviceID); err == nil && savedDevice.Name != "" {
+			rawDeviceName = savedDevice.Name
+		}
+		deviceName := "device"
+		if rawDeviceName != "" {
+			deviceName = sanitizeFilename(rawDeviceName)
+		}
+
+		timestamp := time.Now().Format("2006-01-02-150405")
+		destPath, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+			DefaultFilename: fmt.Sprintf("remarkable-backup-%s-%s.tar.zst", deviceName, timestamp),
+			Title:           "Save Backup",
+		})
+		if err != nil || destPath == "" {
+			return
+		}
+
+		sftpClient, err := sftp.NewClient(client)
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "backup:error", map[string]string{
+				"message": fmt.Sprintf("Failed to create SFTP client: %v", err),
+			})
+			return
+		}
+		defer sftpClient.Close()
+
+		a.backupMu.Lock()
+		a.backupCancelCh = make(chan struct{})
+		cancelCh := a.backupCancelCh
+		a.backupMu.Unlock()
+
+		manager := backup.Manager{
+			Ctx:        a.ctx,
+			SftpClient: sftpClient,
+			SSHClient:  client,
+			CancelCh:   cancelCh,
+			ProgressFn: func(p backup.Progress) {
+				runtime.EventsEmit(a.ctx, "backup:progress", p)
+			},
+			DeviceName: rawDeviceName,
+			DeviceID:   deviceID,
+		}
+
+		sources := []string{
+			"/home/root/.local/share/remarkable/xochitl",
+			"/home/root/.config/remarkable",
+		}
+
+		err = manager.CreateBackup(destPath, sources)
+
+		a.backupMu.Lock()
+		a.backupCancelCh = nil
+		a.backupMu.Unlock()
+
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "backup:error", map[string]string{
+				"message": err.Error(),
+			})
+		} else {
+			runtime.EventsEmit(a.ctx, "backup:complete", map[string]string{
+				"message": "Backup completed successfully",
+				"path":    destPath,
+			})
+		}
+	}()
+}
+
+func (a *App) SelectRestoreFile() string {
+	archivePath, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "Select Backup to Restore",
+	})
+	if err != nil || archivePath == "" {
+		return ""
+	}
+
+	metadata, err := backup.ReadBackupMetadata(archivePath)
+	if err == nil && metadata != nil && metadata.DeviceID != "" {
+		a.mu.Lock()
+		currentDeviceID := a.connectedDeviceID
+		a.mu.Unlock()
+
+		if currentDeviceID != "" && metadata.DeviceID != currentDeviceID {
+			currentDeviceName := ""
+			if savedDevice, err := a.deviceStore.Get(currentDeviceID); err == nil {
+				currentDeviceName = savedDevice.Name
+			}
+			runtime.EventsEmit(a.ctx, "restore:device-mismatch", map[string]string{
+				"backupDevice":  metadata.DeviceName,
+				"currentDevice": currentDeviceName,
+			})
+		}
+	}
+
+	return archivePath
+}
+
+func (a *App) RestoreDeviceBackup(archivePath string) {
+	go func() {
+		a.mu.Lock()
+		client := a.client
+		a.mu.Unlock()
+
+		if client == nil {
+			runtime.EventsEmit(a.ctx, "restore:error", map[string]string{
+				"message": "Not connected to device",
+			})
+			return
+		}
+
+		sftpClient, err := sftp.NewClient(client)
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "restore:error", map[string]string{
+				"message": fmt.Sprintf("Failed to create SFTP client: %v", err),
+			})
+			return
+		}
+		defer sftpClient.Close()
+
+		a.backupMu.Lock()
+		a.backupCancelCh = make(chan struct{})
+		cancelCh := a.backupCancelCh
+		a.backupMu.Unlock()
+
+		manager := backup.Manager{
+			Ctx:        a.ctx,
+			SftpClient: sftpClient,
+			SSHClient:  client,
+			CancelCh:   cancelCh,
+			ProgressFn: func(p backup.Progress) {
+				runtime.EventsEmit(a.ctx, "restore:progress", p)
+			},
+		}
+
+		err = manager.RestoreBackup(archivePath)
+
+		a.backupMu.Lock()
+		a.backupCancelCh = nil
+		a.backupMu.Unlock()
+
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "restore:error", map[string]string{
+				"message": err.Error(),
+			})
+		} else {
+			runtime.EventsEmit(a.ctx, "restore:complete", map[string]string{
+				"message": "Restore completed successfully! Please reboot your device for changes to take effect.",
+			})
+		}
+	}()
+}
+
+func (a *App) CancelBackup() {
+	a.backupMu.Lock()
+	defer a.backupMu.Unlock()
+
+	if a.backupCancelCh != nil {
+		close(a.backupCancelCh)
+		a.backupCancelCh = nil
+	}
+}
+
+func (a *App) RevealInFileManager(path string) {
+	dir := filepath.Dir(path)
+	open.Start(dir)
 }

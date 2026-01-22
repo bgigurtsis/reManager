@@ -142,7 +142,7 @@ export function SettingsDialog({
               </div>
               <div className="flex items-center justify-between gap-4">
                 <div>
-                  <Label htmlFor="suppress-sys-warnings" className="font-normal">Suppress System Warnings</Label>
+                  <Label htmlFor="suppress-sys-warnings" className="font-normal">Suppress Filesystem Warnings</Label>
                   <p className="text-xs text-muted-foreground mt-1">
                     Skip confirmation dialogs when modifying system partition files.
                     Only disable if you are experienced with Linux systems.

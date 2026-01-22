@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useMemo } from 'react'
+import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Progress } from '@/components/ui/progress'
@@ -23,6 +23,12 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from '@/components/ui/popover'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -51,6 +57,7 @@ import {
   Copy,
   Eye,
   EyeOff,
+  Terminal,
 } from 'lucide-react'
 
 interface FileInfo {
@@ -145,6 +152,10 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings }: FileBro
   const [contextMenu, setContextMenu] = useState<{ file: FileInfo; x: number; y: number } | null>(null)
   const [systemFileWarning, setSystemFileWarning] = useState<SystemFileWarning | null>(null)
 
+  const [isEditingPath, setIsEditingPath] = useState(false)
+  const [editedPath, setEditedPath] = useState('')
+  const pathInputRef = useRef<HTMLInputElement>(null)
+
   const isSystemPath = (path: string) => !path.startsWith('/home/root')
 
   const confirmSystemFileAction = (action: SystemFileWarning['action'], path: string, onConfirm: () => void) => {
@@ -165,6 +176,7 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings }: FileBro
       setCurrentPath(path)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load directory')
+      throw err
     } finally {
       setLoading(false)
     }
@@ -206,6 +218,50 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings }: FileBro
       unsubError()
     }
   }, [currentPath, loadDirectory])
+
+  const handleEnterEditMode = () => {
+    setEditedPath(currentPath)
+    setIsEditingPath(true)
+  }
+
+  const handlePathKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      handlePathSubmit()
+    } else if (e.key === 'Escape') {
+      e.preventDefault()
+      handlePathCancel()
+    }
+  }
+
+  const handlePathSubmit = async () => {
+    const trimmedPath = editedPath.trim()
+
+    if (!trimmedPath) {
+      setError('Path cannot be empty')
+      return
+    }
+
+    try {
+      await loadDirectory(trimmedPath)
+      setIsEditingPath(false)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Invalid or inaccessible path')
+    }
+  }
+
+  const handlePathCancel = () => {
+    setIsEditingPath(false)
+    setEditedPath('')
+    setError(null)
+  }
+
+  useEffect(() => {
+    if (isEditingPath && pathInputRef.current) {
+      pathInputRef.current.focus()
+      pathInputRef.current.select()
+    }
+  }, [isEditingPath])
 
   const handleNavigate = (file: FileInfo) => {
     if (file.isDir) {
@@ -343,39 +399,69 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings }: FileBro
 
   return (
     <div className="space-y-4" onClick={closeContextMenu}>
-      {/* Breadcrumb */}
-          <div className="flex items-center gap-2 overflow-x-auto pb-2">
-            <Breadcrumb>
-              <BreadcrumbList>
-                <BreadcrumbItem>
-                  {currentPath === '/' ? (
-                    <BreadcrumbPage>/</BreadcrumbPage>
-                  ) : (
-                    <BreadcrumbLink className="cursor-pointer" onClick={() => loadDirectory('/')}>
-                      /
-                    </BreadcrumbLink>
-                  )}
-                </BreadcrumbItem>
-                {pathSegments.map((segment, i) => {
-                  const isLast = i === pathSegments.length - 1
-                  const segmentPath = '/' + pathSegments.slice(0, i + 1).join('/')
-                  return (
-                    <React.Fragment key={i}>
-                      <BreadcrumbSeparator />
-                      <BreadcrumbItem>
-                        {isLast ? (
-                          <BreadcrumbPage>{segment}</BreadcrumbPage>
-                        ) : (
-                          <BreadcrumbLink className="cursor-pointer" onClick={() => loadDirectory(segmentPath)}>
-                            {segment}
-                          </BreadcrumbLink>
-                        )}
-                      </BreadcrumbItem>
-                    </React.Fragment>
-                  )
-                })}
-              </BreadcrumbList>
-            </Breadcrumb>
+      {/* Breadcrumb / Path Editor */}
+          <div className="flex items-center gap-2 overflow-x-auto p-2">
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 w-8 p-0 shrink-0"
+                    onClick={handleEnterEditMode}
+                    disabled={loading || isEditingPath}
+                  >
+                    <Terminal className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p>Edit path</p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+            {isEditingPath ? (
+              <Input
+                ref={pathInputRef}
+                value={editedPath}
+                onChange={(e) => setEditedPath(e.target.value)}
+                onKeyDown={handlePathKeyDown}
+                onBlur={handlePathSubmit}
+                className="flex-1 font-mono text-sm h-8 focus-visible:ring-1"
+                placeholder="Enter path (e.g., /home/root)"
+              />
+            ) : (
+              <Breadcrumb>
+                <BreadcrumbList>
+                  <BreadcrumbItem>
+                    {currentPath === '/' ? (
+                      <BreadcrumbPage>/</BreadcrumbPage>
+                    ) : (
+                      <BreadcrumbLink className="cursor-pointer" onClick={() => loadDirectory('/')}>
+                        /
+                      </BreadcrumbLink>
+                    )}
+                  </BreadcrumbItem>
+                  {pathSegments.map((segment, i) => {
+                    const isLast = i === pathSegments.length - 1
+                    const segmentPath = '/' + pathSegments.slice(0, i + 1).join('/')
+                    return (
+                      <React.Fragment key={i}>
+                        <BreadcrumbSeparator />
+                        <BreadcrumbItem>
+                          {isLast ? (
+                            <BreadcrumbPage>{segment}</BreadcrumbPage>
+                          ) : (
+                            <BreadcrumbLink className="cursor-pointer" onClick={() => loadDirectory(segmentPath)}>
+                              {segment}
+                            </BreadcrumbLink>
+                          )}
+                        </BreadcrumbItem>
+                      </React.Fragment>
+                    )
+                  })}
+                </BreadcrumbList>
+              </Breadcrumb>
+            )}
           </div>
 
           {/* Toolbar */}

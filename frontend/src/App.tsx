@@ -18,6 +18,7 @@ import { SettingsDialog } from '@/components/SettingsDialog'
 import { InteractiveTerminal } from '@/components/InteractiveTerminal'
 import { FileBrowser } from '@/components/FileBrowser'
 import { ConfigEditor } from '@/components/ConfigEditor'
+import { BackupRestoreDialog } from '@/components/BackupRestore'
 import { DnsErrorModal } from '@/components/DnsErrorModal'
 import { TimezoneCombobox } from '@/components/TimezoneCombobox'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
@@ -205,6 +206,11 @@ declare global {
           BackupConfigFile(): Promise<string>
           ListConfigBackups(): Promise<Array<{name: string; timestamp: number; size: number}>>
           RestoreConfigBackup(backupName: string): Promise<void>
+          CreateDeviceBackup(): void
+          SelectRestoreFile(): Promise<string>
+          RestoreDeviceBackup(archivePath: string): void
+          CancelBackup(): void
+          RevealInFileManager(path: string): void
         }
       }
     }
@@ -279,6 +285,7 @@ export default function App() {
   const [showSettingsDialog, setShowSettingsDialog] = useState(false)
   const [showFileBrowser, setShowFileBrowser] = useState(false)
   const [showConfigEditor, setShowConfigEditor] = useState(false)
+  const [backupDialogMode, setBackupDialogMode] = useState<'backup' | 'restore' | null>(null)
   const [isTerminalRunning, setIsTerminalRunning] = useState(false)
   const [appVersion, setAppVersion] = useState('dev')
   const [tabVisibility, setTabVisibility] = useState<Record<string, boolean>>({
@@ -2486,7 +2493,7 @@ export default function App() {
                   <Card className={isTerminalRunning ? 'md:col-span-2' : ''}>
                     <CardHeader>
                       <CardTitle>Terminal</CardTitle>
-                      <CardDescription>Interactive SSH shell to your reMarkable</CardDescription>
+                      <CardDescription>Interactive SSH shell</CardDescription>
                     </CardHeader>
                     <CardContent>
                       <InteractiveTerminal
@@ -2499,7 +2506,7 @@ export default function App() {
                   <Card>
                     <CardHeader>
                       <CardTitle>File Browser</CardTitle>
-                      <CardDescription>Browse and transfer files on your reMarkable</CardDescription>
+                      <CardDescription>Browse and transfer files</CardDescription>
                     </CardHeader>
                     <CardContent>
                       <Button
@@ -2525,6 +2532,30 @@ export default function App() {
                         disabled={connectionStatus !== 'connected'}
                       >
                         xochitl.conf
+                      </Button>
+                    </CardContent>
+                  </Card>
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>Backup & Restore</CardTitle>
+                      <CardDescription>Manage device backups</CardDescription>
+                    </CardHeader>
+                    <CardContent className="flex gap-2">
+                      <Button
+                        className="flex-1"
+                        variant="outline"
+                        onClick={() => setBackupDialogMode('backup')}
+                        disabled={connectionStatus !== 'connected'}
+                      >
+                        Backup
+                      </Button>
+                      <Button
+                        className="flex-1"
+                        variant="outline"
+                        onClick={() => setBackupDialogMode('restore')}
+                        disabled={connectionStatus !== 'connected'}
+                      >
+                        Restore
                       </Button>
                     </CardContent>
                   </Card>
@@ -2613,6 +2644,12 @@ export default function App() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Backup & Restore Dialog */}
+      <BackupRestoreDialog
+        mode={backupDialogMode}
+        onClose={() => setBackupDialogMode(null)}
+      />
 
       {/* Orphan Dependency Removal Dialog */}
       <Dialog open={pendingOrphanRemoval !== null} onOpenChange={(open) => !open && setPendingOrphanRemoval(null)}>
