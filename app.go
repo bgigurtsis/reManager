@@ -28,6 +28,7 @@ import (
 	"reManager/internal/backup"
 	"reManager/internal/commands"
 	"reManager/internal/component"
+	"reManager/internal/debug"
 	"reManager/internal/device"
 	"reManager/internal/executor"
 	"reManager/internal/installer"
@@ -35,18 +36,6 @@ import (
 	"reManager/internal/storage"
 	"reManager/internal/vellum"
 )
-
-func debugf(format string, args ...interface{}) {
-	if debugMode {
-		fmt.Printf(format, args...)
-	}
-}
-
-func debugln(args ...interface{}) {
-	if debugMode {
-		fmt.Println(args...)
-	}
-}
 
 func openFileDialog(ctx context.Context, title string) (string, error) {
 	if platform.IsRunningInFlatpak() {
@@ -498,14 +487,14 @@ func (a *App) dialWithContextWithRetry(ctx context.Context, addr string, config 
 		default:
 		}
 
-		debugf("[%s] dialWithContextWithRetry attempt %d/%d to %s\n", time.Now().Format("15:04:05.000"), attempt+1, maxRetries+1, addr)
+		debug.Printf("[%s] dialWithContextWithRetry attempt %d/%d to %s\n", time.Now().Format("15:04:05.000"), attempt+1, maxRetries+1, addr)
 		client, err := a.dialWithContext(ctx, addr, config)
 		if err == nil {
-			debugf("[%s] dialWithContextWithRetry attempt %d/%d succeeded\n", time.Now().Format("15:04:05.000"), attempt+1, maxRetries+1)
+			debug.Printf("[%s] dialWithContextWithRetry attempt %d/%d succeeded\n", time.Now().Format("15:04:05.000"), attempt+1, maxRetries+1)
 			return client, nil
 		}
 
-		debugf("[%s] dialWithContextWithRetry attempt %d/%d failed: %v\n", time.Now().Format("15:04:05.000"), attempt+1, maxRetries+1, err)
+		debug.Printf("[%s] dialWithContextWithRetry attempt %d/%d failed: %v\n", time.Now().Format("15:04:05.000"), attempt+1, maxRetries+1, err)
 		lastErr = err
 
 		if ctx.Err() == context.Canceled {
@@ -513,7 +502,7 @@ func (a *App) dialWithContextWithRetry(ctx context.Context, addr string, config 
 		}
 
 		if !isRetryableError(err) {
-			debugf("[%s] Error not retryable, giving up\n", time.Now().Format("15:04:05.000"))
+			debug.Printf("[%s] Error not retryable, giving up\n", time.Now().Format("15:04:05.000"))
 			return nil, err
 		}
 
@@ -522,7 +511,7 @@ func (a *App) dialWithContextWithRetry(ctx context.Context, addr string, config 
 		}
 
 		backoffDuration := backoffDurations[attempt]
-		debugf("[%s] dialWithContextWithRetry waiting %v before retry\n", time.Now().Format("15:04:05.000"), backoffDuration)
+		debug.Printf("[%s] dialWithContextWithRetry waiting %v before retry\n", time.Now().Format("15:04:05.000"), backoffDuration)
 
 		select {
 		case <-time.After(backoffDuration):
@@ -648,13 +637,13 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 	a.mu.Lock()
 	a.client = client
 	a.connectCancel = nil
-	debugln("[DEBUG] SSH connected, creating vellum client")
+	debug.Println("[DEBUG] SSH connected, creating vellum client")
 	a.vellumClient = vellum.NewClient(&wailsExecutor{app: a})
 	a.mu.Unlock()
 
-	debugln("[DEBUG] Detecting device...")
+	debug.Println("[DEBUG] Detecting device...")
 	deviceType, err := a.detectDevice()
-	debugf("[DEBUG] Device detected: %s, err: %v\n", deviceType, err)
+	debug.Printf("[DEBUG] Device detected: %s, err: %v\n", deviceType, err)
 	if err != nil {
 		return ConnectionResult{
 			Success: true,
@@ -665,12 +654,12 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 
 	go func() {
 		if err := a.metadata.Refresh(); err != nil {
-			debugf("[DEBUG] Metadata refresh failed: %v\n", err)
+			debug.Printf("[DEBUG] Metadata refresh failed: %v\n", err)
 		}
 
-		debugln("[DEBUG] Checking if vellum is installed...")
+		debug.Println("[DEBUG] Checking if vellum is installed...")
 		installed, err := a.vellumClient.IsInstalled()
-		debugf("[DEBUG] Vellum installed: %v, err: %v\n", installed, err)
+		debug.Printf("[DEBUG] Vellum installed: %v, err: %v\n", installed, err)
 		if err == nil && !installed {
 			runtime.EventsEmit(a.ctx, "vellum:bootstrap-prompt", nil)
 		} else if err == nil && installed {
@@ -678,7 +667,7 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 
 			osState, err := a.vellumClient.GetOSVersionState()
 			if err == nil && osState.Mismatch {
-				debugf("[DEBUG] OS mismatch detected: stored=%s, current=%s\n",
+				debug.Printf("[DEBUG] OS mismatch detected: stored=%s, current=%s\n",
 					osState.StoredVersion, osState.CurrentVersion)
 				runtime.EventsEmit(a.ctx, "os:mismatch", map[string]string{
 					"prevVersion": osState.StoredVersion,
@@ -687,20 +676,20 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 			}
 
 			status := a.CheckHashtabVersion()
-			debugf("[DEBUG] Hashtab check: installed=%v, hashtabVersion=%s, firmwareVersion=%s, needsRebuild=%v\n",
+			debug.Printf("[DEBUG] Hashtab check: installed=%v, hashtabVersion=%s, firmwareVersion=%s, needsRebuild=%v\n",
 				status.Installed, status.HashtabVersion, status.FirmwareVersion, status.NeedsRebuild)
 			if status.NeedsRebuild {
 				runtime.EventsEmit(a.ctx, "hashtab:version-mismatch", status)
 			}
 
 			updateStatus := a.GetUpdateServiceStatus()
-			debugf("[DEBUG] Auto-update check: enabled=%v, running=%v\n", updateStatus.Enabled, updateStatus.Running)
+			debug.Printf("[DEBUG] Auto-update check: enabled=%v, running=%v\n", updateStatus.Enabled, updateStatus.Running)
 			if updateStatus.Enabled || updateStatus.Running {
 				runtime.EventsEmit(a.ctx, "autoupdate:enabled", updateStatus)
 			}
 
 			timezoneStatus := a.GetTimezoneStatus()
-			debugf("[DEBUG] Timezone check: device=%s, saved=%s, needsUpdate=%v\n",
+			debug.Printf("[DEBUG] Timezone check: device=%s, saved=%s, needsUpdate=%v\n",
 				timezoneStatus.DeviceTimezone, timezoneStatus.SavedTimezone, timezoneStatus.NeedsUpdate)
 
 			// Auto-save device timezone if no preference saved yet
@@ -710,7 +699,7 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 				a.mu.Unlock()
 				if deviceID != "" && a.deviceStore != nil {
 					if err := a.deviceStore.UpdateTimezone(deviceID, timezoneStatus.DeviceTimezone); err == nil {
-						debugf("[DEBUG] Auto-saved device timezone: %s\n", timezoneStatus.DeviceTimezone)
+						debug.Printf("[DEBUG] Auto-saved device timezone: %s\n", timezoneStatus.DeviceTimezone)
 						timezoneStatus.SavedTimezone = timezoneStatus.DeviceTimezone
 					}
 				}
@@ -894,12 +883,12 @@ func (a *App) handleConnectionLost(err error) {
 }
 
 func (a *App) attemptReconnect(deviceID string) {
-	debugf("[%s] attemptReconnect started for device %s\n", time.Now().Format("15:04:05.000"), deviceID)
+	debug.Printf("[%s] attemptReconnect started for device %s\n", time.Now().Format("15:04:05.000"), deviceID)
 
 	a.reconnectMu.Lock()
 	if a.reconnecting {
 		a.reconnectMu.Unlock()
-		debugf("[%s] Already reconnecting, skipping\n", time.Now().Format("15:04:05.000"))
+		debug.Printf("[%s] Already reconnecting, skipping\n", time.Now().Format("15:04:05.000"))
 		return
 	}
 	a.reconnecting = true
@@ -911,7 +900,7 @@ func (a *App) attemptReconnect(deviceID string) {
 		a.reconnecting = false
 		a.fastDialMode = false
 		a.reconnectMu.Unlock()
-		debugf("[%s] attemptReconnect finished\n", time.Now().Format("15:04:05.000"))
+		debug.Printf("[%s] attemptReconnect finished\n", time.Now().Format("15:04:05.000"))
 	}()
 
 	for attempt := 0; attempt < maxReconnectAttempts; attempt++ {
@@ -920,11 +909,11 @@ func (a *App) attemptReconnect(deviceID string) {
 		a.reconnectMu.Unlock()
 
 		if !stillReconnecting {
-			debugf("[%s] Reconnect cancelled\n", time.Now().Format("15:04:05.000"))
+			debug.Printf("[%s] Reconnect cancelled\n", time.Now().Format("15:04:05.000"))
 			return
 		}
 
-		debugf("[%s] Reconnect attempt %d/%d starting\n", time.Now().Format("15:04:05.000"), attempt+1, maxReconnectAttempts)
+		debug.Printf("[%s] Reconnect attempt %d/%d starting\n", time.Now().Format("15:04:05.000"), attempt+1, maxReconnectAttempts)
 
 		runtime.EventsEmit(a.ctx, "connection:reconnecting", map[string]interface{}{
 			"attempt":     attempt + 1,
@@ -933,7 +922,7 @@ func (a *App) attemptReconnect(deviceID string) {
 		})
 
 		result := a.ConnectToSavedDevice(deviceID)
-		debugf("[%s] Reconnect attempt %d/%d result: success=%v, message=%s\n", time.Now().Format("15:04:05.000"), attempt+1, maxReconnectAttempts, result.Success, result.Message)
+		debug.Printf("[%s] Reconnect attempt %d/%d result: success=%v, message=%s\n", time.Now().Format("15:04:05.000"), attempt+1, maxReconnectAttempts, result.Success, result.Message)
 
 		if result.Success {
 			runtime.EventsEmit(a.ctx, "connection:restored", map[string]interface{}{
@@ -956,13 +945,13 @@ func (a *App) attemptReconnect(deviceID string) {
 			if backoffIdx >= len(reconnectBackoff) {
 				backoffIdx = len(reconnectBackoff) - 1
 			}
-			debugf("[%s] Waiting %v before next attempt\n", time.Now().Format("15:04:05.000"), reconnectBackoff[backoffIdx])
+			debug.Printf("[%s] Waiting %v before next attempt\n", time.Now().Format("15:04:05.000"), reconnectBackoff[backoffIdx])
 			time.Sleep(reconnectBackoff[backoffIdx])
-			debugf("[%s] Backoff complete\n", time.Now().Format("15:04:05.000"))
+			debug.Printf("[%s] Backoff complete\n", time.Now().Format("15:04:05.000"))
 		}
 	}
 
-	debugf("[%s] All reconnect attempts exhausted\n", time.Now().Format("15:04:05.000"))
+	debug.Printf("[%s] All reconnect attempts exhausted\n", time.Now().Format("15:04:05.000"))
 	runtime.EventsEmit(a.ctx, "connection:failed", map[string]interface{}{
 		"reason":   "Maximum reconnection attempts exceeded",
 		"deviceId": deviceID,
@@ -974,17 +963,17 @@ func (a *App) runCommand(cmd string) (string, error) {
 		return "", fmt.Errorf("not connected")
 	}
 
-	debugf("[DEBUG] runCommand creating session: %s\n", cmd[:min(50, len(cmd))])
+	debug.Printf("[DEBUG] runCommand creating session: %s\n", cmd[:min(50, len(cmd))])
 	session, err := a.client.NewSession()
 	if err != nil {
-		debugf("[DEBUG] runCommand session error: %v\n", err)
+		debug.Printf("[DEBUG] runCommand session error: %v\n", err)
 		return "", err
 	}
 	defer session.Close()
 
-	debugf("[DEBUG] runCommand executing: %s\n", cmd[:min(50, len(cmd))])
+	debug.Printf("[DEBUG] runCommand executing: %s\n", cmd[:min(50, len(cmd))])
 	output, err := session.CombinedOutput(cmd)
-	debugf("[DEBUG] runCommand done: %s, err: %v\n", cmd[:min(50, len(cmd))], err)
+	debug.Printf("[DEBUG] runCommand done: %s, err: %v\n", cmd[:min(50, len(cmd))], err)
 	return string(output), err
 }
 
@@ -1000,13 +989,13 @@ func (a *App) RunCommand(cmd string) string {
 }
 
 func (a *App) RunCommandWithOutput(cmd string, requiresPTY bool) {
-	debugln("[DEBUG] RunCommandWithOutput called:", cmd[:min(50, len(cmd))], "requiresPTY:", requiresPTY)
+	debug.Println("[DEBUG] RunCommandWithOutput called:", cmd[:min(50, len(cmd))], "requiresPTY:", requiresPTY)
 	go func() {
 		a.mu.Lock()
 
 		if a.client == nil {
 			a.mu.Unlock()
-			debugln("[DEBUG] Not connected, emitting error")
+			debug.Println("[DEBUG] Not connected, emitting error")
 			runtime.EventsEmit(a.ctx, "command:output", "Error: not connected\n")
 			runtime.EventsEmit(a.ctx, "command:done", false)
 			return
@@ -1015,7 +1004,7 @@ func (a *App) RunCommandWithOutput(cmd string, requiresPTY bool) {
 		session, err := a.client.NewSession()
 		if err != nil {
 			a.mu.Unlock()
-			debugln("[DEBUG] Session error:", err)
+			debug.Println("[DEBUG] Session error:", err)
 			runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("Error: %v\n", err))
 			runtime.EventsEmit(a.ctx, "command:done", false)
 			return
@@ -1029,12 +1018,12 @@ func (a *App) RunCommandWithOutput(cmd string, requiresPTY bool) {
 			})
 			if err != nil {
 				a.mu.Unlock()
-				debugln("[DEBUG] PTY request error:", err)
+				debug.Println("[DEBUG] PTY request error:", err)
 				runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("Error requesting PTY: %v\n", err))
 				runtime.EventsEmit(a.ctx, "command:done", false)
 				return
 			}
-			debugln("[DEBUG] PTY allocated successfully")
+			debug.Println("[DEBUG] PTY allocated successfully")
 		}
 
 		a.commandSession = session
@@ -1073,9 +1062,9 @@ func (a *App) RunCommandWithOutput(cmd string, requiresPTY bool) {
 		a.commandStdin = stdin
 		a.mu.Unlock()
 
-		debugln("[DEBUG] Starting command")
+		debug.Println("[DEBUG] Starting command")
 		if err := session.Start(cmd); err != nil {
-			debugln("[DEBUG] Start error:", err)
+			debug.Println("[DEBUG] Start error:", err)
 			runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("Error: %v\n", err))
 			runtime.EventsEmit(a.ctx, "command:done", false)
 			return
@@ -1090,7 +1079,7 @@ func (a *App) RunCommandWithOutput(cmd string, requiresPTY bool) {
 			for {
 				n, err := stdout.Read(buf)
 				if n > 0 {
-					debugf("[DEBUG] stdout: %d bytes\n", n)
+					debug.Printf("[DEBUG] stdout: %d bytes\n", n)
 					runtime.EventsEmit(a.ctx, "command:output", string(buf[:n]))
 				}
 				if err == io.EOF {
@@ -1107,7 +1096,7 @@ func (a *App) RunCommandWithOutput(cmd string, requiresPTY bool) {
 			for {
 				n, err := stderr.Read(buf)
 				if n > 0 {
-					debugf("[DEBUG] stderr: %d bytes\n", n)
+					debug.Printf("[DEBUG] stderr: %d bytes\n", n)
 					runtime.EventsEmit(a.ctx, "command:output", string(buf[:n]))
 				}
 				if err == io.EOF {
@@ -1120,7 +1109,7 @@ func (a *App) RunCommandWithOutput(cmd string, requiresPTY bool) {
 		}()
 
 		err = session.Wait()
-		debugln("[DEBUG] Command done, success:", err == nil)
+		debug.Println("[DEBUG] Command done, success:", err == nil)
 		runtime.EventsEmit(a.ctx, "command:done", err == nil)
 	}()
 }
@@ -1131,15 +1120,15 @@ func (a *App) StopCommand() {
 	a.mu.Unlock()
 
 	if stdin != nil {
-		debugln("[DEBUG] Sending Ctrl+C (0x03) to stdin")
+		debug.Println("[DEBUG] Sending Ctrl+C (0x03) to stdin")
 		_, err := stdin.Write([]byte{0x03})
 		if err != nil {
-			debugf("[DEBUG] Error writing Ctrl+C to stdin: %v\n", err)
+			debug.Printf("[DEBUG] Error writing Ctrl+C to stdin: %v\n", err)
 		} else {
-			debugln("[DEBUG] Ctrl+C sent successfully")
+			debug.Println("[DEBUG] Ctrl+C sent successfully")
 		}
 	} else {
-		debugln("[DEBUG] No stdin available to send Ctrl+C")
+		debug.Println("[DEBUG] No stdin available to send Ctrl+C")
 	}
 }
 
@@ -1327,23 +1316,23 @@ func (a *App) GetUpdateServiceStatus() UpdateServiceStatus {
 	}
 
 	if a.client == nil {
-		debugln("[DEBUG] GetUpdateServiceStatus: client is nil")
+		debug.Println("[DEBUG] GetUpdateServiceStatus: client is nil")
 		return status
 	}
 
 	output, err := a.runCommand("systemctl is-enabled update-engine.service")
-	debugf("[DEBUG] GetUpdateServiceStatus: is-enabled output=%q, err=%v\n", output, err)
+	debug.Printf("[DEBUG] GetUpdateServiceStatus: is-enabled output=%q, err=%v\n", output, err)
 	if err == nil {
 		status.Enabled = strings.TrimSpace(output) == "enabled"
 	}
 
 	output, err = a.runCommand("systemctl is-active update-engine.service")
-	debugf("[DEBUG] GetUpdateServiceStatus: is-active output=%q, err=%v\n", output, err)
+	debug.Printf("[DEBUG] GetUpdateServiceStatus: is-active output=%q, err=%v\n", output, err)
 	if err == nil {
 		status.Running = strings.TrimSpace(output) == "active"
 	}
 
-	debugf("[DEBUG] GetUpdateServiceStatus: returning enabled=%v, running=%v\n", status.Enabled, status.Running)
+	debug.Printf("[DEBUG] GetUpdateServiceStatus: returning enabled=%v, running=%v\n", status.Enabled, status.Running)
 	return status
 }
 
@@ -1545,9 +1534,9 @@ func containsString(slice []string, s string) bool {
 }
 
 func (a *App) GetPackages(deviceType string) []PackageInfo {
-	debugf("[DEBUG] GetPackages called, metadata=%p, deviceType=%s\n", a.metadata, deviceType)
+	debug.Printf("[DEBUG] GetPackages called, metadata=%p, deviceType=%s\n", a.metadata, deviceType)
 	packages := a.metadata.GetAllPackages()
-	debugf("[DEBUG] GetPackages got %d packages\n", len(packages))
+	debug.Printf("[DEBUG] GetPackages got %d packages\n", len(packages))
 	var result []PackageInfo
 
 	for _, pkg := range packages {
@@ -1579,7 +1568,7 @@ func (a *App) GetPackages(deviceType string) []PackageInfo {
 		})
 	}
 
-	debugf("[DEBUG] GetPackages returning %d PackageInfo\n", len(result))
+	debug.Printf("[DEBUG] GetPackages returning %d PackageInfo\n", len(result))
 	return result
 }
 
@@ -1750,25 +1739,25 @@ type PackageCompatibilityStatus struct {
 }
 
 func (a *App) GetPackageCompatibilityStatus() PackageCompatibilityStatus {
-	debugln("[DEBUG] GetPackageCompatibilityStatus: called")
+	debug.Println("[DEBUG] GetPackageCompatibilityStatus: called")
 	if a.vellumClient == nil {
-		debugln("[DEBUG] GetPackageCompatibilityStatus: vellumClient is nil")
+		debug.Println("[DEBUG] GetPackageCompatibilityStatus: vellumClient is nil")
 		return PackageCompatibilityStatus{FetchFailed: true}
 	}
 
 	osState, err := a.vellumClient.GetOSVersionState()
 	if err != nil {
-		debugf("[DEBUG] GetPackageCompatibilityStatus: GetOSVersionState error: %v\n", err)
+		debug.Printf("[DEBUG] GetPackageCompatibilityStatus: GetOSVersionState error: %v\n", err)
 		return PackageCompatibilityStatus{FetchFailed: true}
 	}
-	debugf("[DEBUG] GetPackageCompatibilityStatus: osState=%+v\n", osState)
+	debug.Printf("[DEBUG] GetPackageCompatibilityStatus: osState=%+v\n", osState)
 
 	installed, err := a.vellumClient.List()
 	if err != nil {
-		debugf("[DEBUG] GetPackageCompatibilityStatus: List error: %v\n", err)
+		debug.Printf("[DEBUG] GetPackageCompatibilityStatus: List error: %v\n", err)
 		return PackageCompatibilityStatus{FetchFailed: true}
 	}
-	debugf("[DEBUG] GetPackageCompatibilityStatus: installed=%v\n", installed)
+	debug.Printf("[DEBUG] GetPackageCompatibilityStatus: installed=%v\n", installed)
 
 	var filteredInstalled []string
 	for _, pkg := range installed {
@@ -1776,13 +1765,13 @@ func (a *App) GetPackageCompatibilityStatus() PackageCompatibilityStatus {
 			filteredInstalled = append(filteredInstalled, pkg)
 		}
 	}
-	debugf("[DEBUG] GetPackageCompatibilityStatus: filteredInstalled=%v\n", filteredInstalled)
+	debug.Printf("[DEBUG] GetPackageCompatibilityStatus: filteredInstalled=%v\n", filteredInstalled)
 
 	compat, err := a.vellumClient.CheckOSCompatibility(osState.CurrentVersion)
-	debugf("[DEBUG] GetPackageCompatibilityStatus: compat=%+v, err=%v\n", compat, err)
+	debug.Printf("[DEBUG] GetPackageCompatibilityStatus: compat=%+v, err=%v\n", compat, err)
 
 	if err != nil && (compat == nil || compat.FetchFailed) {
-		debugln("[DEBUG] GetPackageCompatibilityStatus: returning with FetchFailed due to error")
+		debug.Println("[DEBUG] GetPackageCompatibilityStatus: returning with FetchFailed due to error")
 		return PackageCompatibilityStatus{
 			InstalledPackages: filteredInstalled,
 			CurrentOsVersion:  osState.CurrentVersion,
@@ -1793,7 +1782,7 @@ func (a *App) GetPackageCompatibilityStatus() PackageCompatibilityStatus {
 
 	allEmpty := len(compat.Compatible) == 0 && len(compat.Incompatible) == 0 && len(compat.NoConstraint) == 0
 	if compat.FetchFailed || allEmpty {
-		debugf("[DEBUG] GetPackageCompatibilityStatus: fallback (FetchFailed=%v, allEmpty=%v)\n", compat.FetchFailed, allEmpty)
+		debug.Printf("[DEBUG] GetPackageCompatibilityStatus: fallback (FetchFailed=%v, allEmpty=%v)\n", compat.FetchFailed, allEmpty)
 		return PackageCompatibilityStatus{
 			InstalledPackages:    filteredInstalled,
 			CompatiblePackages:   filteredInstalled,
@@ -1812,7 +1801,7 @@ func (a *App) GetPackageCompatibilityStatus() PackageCompatibilityStatus {
 		StoredOsVersion:      osState.StoredVersion,
 		FetchFailed:          false,
 	}
-	debugf("[DEBUG] GetPackageCompatibilityStatus: returning result=%+v\n", result)
+	debug.Printf("[DEBUG] GetPackageCompatibilityStatus: returning result=%+v\n", result)
 	return result
 }
 
@@ -1994,7 +1983,7 @@ func (a *App) SimulateInstall(packageNames []string, deviceType string) (*Instal
 	// Use SimulateAdd to get all packages that will be installed
 	allPackages, err := a.vellumClient.SimulateAdd(packageNames...)
 	if err != nil {
-		debugf("[DEBUG] SimulateAdd failed: %v, using packageNames only\n", err)
+		debug.Printf("[DEBUG] SimulateAdd failed: %v, using packageNames only\n", err)
 		return &InstallSimulationResult{Packages: packageNames, Requested: packageNames}, nil
 	}
 
@@ -2014,7 +2003,7 @@ func (a *App) SimulateUninstall(packageNames []string) (*UninstallSimulationResu
 
 	simResult, err := a.vellumClient.SimulateDel(packageNames...)
 	if err != nil {
-		debugf("[DEBUG] SimulateDel failed: %v\n", err)
+		debug.Printf("[DEBUG] SimulateDel failed: %v\n", err)
 		return &UninstallSimulationResult{Packages: packageNames}, nil
 	}
 
@@ -2027,7 +2016,7 @@ func (a *App) SimulateUninstall(packageNames []string) (*UninstallSimulationResu
 	if len(simResult.Blocked) > 0 {
 		recursiveList, err := a.vellumClient.SimulateDelRecursive(packageNames...)
 		if err != nil {
-			debugf("[DEBUG] SimulateDelRecursive failed: %v\n", err)
+			debug.Printf("[DEBUG] SimulateDelRecursive failed: %v\n", err)
 		} else {
 			result.RecursivePackages = recursiveList
 		}
@@ -2232,11 +2221,11 @@ func (a *App) UninstallPackages(packageNames []string, deviceType string) {
 		if a.vellumClient != nil {
 			simResult, err := a.vellumClient.SimulateDel(packageNames...)
 			if err != nil {
-				debugf("[DEBUG] SimulateDel failed: %v, using packageNames only\n", err)
+				debug.Printf("[DEBUG] SimulateDel failed: %v, using packageNames only\n", err)
 				allPackages = packageNames
 			} else if len(simResult.Blocked) > 0 {
 				// Packages are blocked by dependents - prompt user
-				debugf("[DEBUG] Packages blocked: %v\n", simResult.Blocked)
+				debug.Printf("[DEBUG] Packages blocked: %v\n", simResult.Blocked)
 				runtime.EventsEmit(a.ctx, "uninstall:blocked", BlockedUninstallInfo{
 					RequestedPackages: packageNames,
 					BlockedBy:         simResult.Blocked,
@@ -2255,7 +2244,7 @@ func (a *App) UninstallPackages(packageNames []string, deviceType string) {
 				useRecursive = true
 				allPackages, err = a.vellumClient.SimulateDelRecursive(packageNames...)
 				if err != nil {
-					debugf("[DEBUG] SimulateDelRecursive failed: %v\n", err)
+					debug.Printf("[DEBUG] SimulateDelRecursive failed: %v\n", err)
 					allPackages = packageNames
 				}
 			} else {
@@ -2473,12 +2462,12 @@ func (e *wailsExecutor) Execute(cmds []component.CommandResult) error {
 }
 
 func (e *wailsExecutor) ExecuteWithOutput(cmd string) (string, error) {
-	debugf("[DEBUG] ExecuteWithOutput waiting for lock: %s\n", cmd[:min(50, len(cmd))])
+	debug.Printf("[DEBUG] ExecuteWithOutput waiting for lock: %s\n", cmd[:min(50, len(cmd))])
 	e.app.mu.Lock()
-	debugf("[DEBUG] ExecuteWithOutput got lock: %s\n", cmd[:min(50, len(cmd))])
+	debug.Printf("[DEBUG] ExecuteWithOutput got lock: %s\n", cmd[:min(50, len(cmd))])
 	defer func() {
 		e.app.mu.Unlock()
-		debugf("[DEBUG] ExecuteWithOutput released lock: %s\n", cmd[:min(50, len(cmd))])
+		debug.Printf("[DEBUG] ExecuteWithOutput released lock: %s\n", cmd[:min(50, len(cmd))])
 	}()
 	return e.app.runCommand(cmd)
 }
@@ -3237,56 +3226,56 @@ func (a *App) ListConfigBackups() ([]BackupInfo, error) {
 }
 
 func (a *App) RestoreConfigBackup(backupName string) error {
-	debugln("RestoreConfigBackup called with backupName:", backupName)
+	debug.Println("RestoreConfigBackup called with backupName:", backupName)
 	a.mu.Lock()
 	client := a.client
 	a.mu.Unlock()
 
 	if client == nil {
-		debugln("RestoreConfigBackup: not connected")
+		debug.Println("RestoreConfigBackup: not connected")
 		return fmt.Errorf("not connected")
 	}
 
 	if !strings.HasPrefix(backupName, "xochitl.conf.backup-") {
-		debugln("RestoreConfigBackup: invalid backup name")
+		debug.Println("RestoreConfigBackup: invalid backup name")
 		return fmt.Errorf("invalid backup name")
 	}
 
 	sftpClient, err := sftp.NewClient(client)
 	if err != nil {
-		debugln("RestoreConfigBackup: failed to create SFTP client:", err)
+		debug.Println("RestoreConfigBackup: failed to create SFTP client:", err)
 		return fmt.Errorf("failed to create SFTP client: %w", err)
 	}
 	defer sftpClient.Close()
 
 	backupPath := path.Join("/home/root/.config/remarkable", backupName)
-	debugln("RestoreConfigBackup: opening backup file:", backupPath)
+	debug.Println("RestoreConfigBackup: opening backup file:", backupPath)
 	file, err := sftpClient.Open(backupPath)
 	if err != nil {
-		debugln("RestoreConfigBackup: failed to open backup file:", err)
+		debug.Println("RestoreConfigBackup: failed to open backup file:", err)
 		return fmt.Errorf("failed to open backup file: %w", err)
 	}
 	defer file.Close()
 
 	content, err := io.ReadAll(file)
 	if err != nil {
-		debugln("RestoreConfigBackup: failed to read backup file:", err)
+		debug.Println("RestoreConfigBackup: failed to read backup file:", err)
 		return fmt.Errorf("failed to read backup file: %w", err)
 	}
-	debugln("RestoreConfigBackup: read", len(content), "bytes from backup")
+	debug.Println("RestoreConfigBackup: read", len(content), "bytes from backup")
 
 	_, err = ini.Load(content)
 	if err != nil {
-		debugln("RestoreConfigBackup: backup file has invalid INI syntax:", err)
+		debug.Println("RestoreConfigBackup: backup file has invalid INI syntax:", err)
 		return fmt.Errorf("backup file has invalid INI syntax: %w", err)
 	}
 
-	debugln("RestoreConfigBackup: calling WriteConfigFile")
+	debug.Println("RestoreConfigBackup: calling WriteConfigFile")
 	err = a.WriteConfigFile(string(content))
 	if err != nil {
-		debugln("RestoreConfigBackup: WriteConfigFile failed:", err)
+		debug.Println("RestoreConfigBackup: WriteConfigFile failed:", err)
 	} else {
-		debugln("RestoreConfigBackup: success")
+		debug.Println("RestoreConfigBackup: success")
 	}
 	return err
 }
