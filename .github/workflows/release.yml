@@ -260,16 +260,10 @@ jobs:
       - name: Build Flatpak
         uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
-          bundle: reManager-x86_64.flatpak
+          bundle: reManager.flatpak
           manifest-path: flatpak/io.scottlabs.reManager.yml
           arch: x86_64
           cache-key: flatpak-builder-x86_64-${{ github.sha }}
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: reManager-flatpak-x86_64
-          path: reManager-x86_64.flatpak
 
   build-flatpak-aarch64:
     runs-on: ubuntu-24.04-arm
@@ -282,16 +276,10 @@ jobs:
       - name: Build Flatpak
         uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
-          bundle: reManager-aarch64.flatpak
+          bundle: reManager.flatpak
           manifest-path: flatpak/io.scottlabs.reManager.yml
           arch: aarch64
           cache-key: flatpak-builder-aarch64-${{ github.sha }}
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: reManager-flatpak-aarch64
-          path: reManager-aarch64.flatpak
 
   release:
     needs: [build-macos, build-linux-amd64, build-linux-arm64, build-windows, build-windows-arm64, build-flatpak-x86_64, build-flatpak-aarch64]
@@ -310,7 +298,7 @@ jobs:
         run: |
           {
             echo 'CHANGELOG<<EOF'
-            git cliff --config https://gist.githubusercontent.com/rmitchellscott/823c46de7a1c3e6d57e9de90ee00d84a/raw/cliff.toml \
+            git cliff --config-url https://gist.githubusercontent.com/rmitchellscott/823c46de7a1c3e6d57e9de90ee00d84a/raw/cliff.toml \
               --latest --strip header | tail -n +2
             echo EOF
           } >> $GITHUB_OUTPUT
@@ -330,5 +318,5 @@ jobs:
             artifacts/reManager-linux-arm64/reManager-linux-arm64.tar.gz
             artifacts/reManager-windows-amd64/reManager-windows-amd64.zip
             artifacts/reManager-windows-arm64/reManager-windows-arm64.zip
-            artifacts/reManager-flatpak-x86_64/reManager-x86_64.flatpak
-            artifacts/reManager-flatpak-aarch64/reManager-aarch64.flatpak
+            artifacts/reManager-x86_64/reManager-x86_64.flatpak
+            artifacts/reManager-aarch64/reManager-aarch64.flatpak
