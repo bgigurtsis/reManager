@@ -2691,7 +2691,7 @@ export default function App() {
       </Dialog>
 
       {/* Hook Dialog (e.g., Rebuild Qt Resources) */}
-      <Dialog open={showRebuildDialog} onOpenChange={setShowRebuildDialog} className="z-[60]">
+      <Dialog open={showRebuildDialog} onOpenChange={setShowRebuildDialog} priority>
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
