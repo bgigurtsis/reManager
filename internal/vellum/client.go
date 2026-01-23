@@ -407,18 +407,13 @@ func parseBlockedPackages(output string) map[string][]string {
 }
 
 func (c *Client) UninstallVellum(removeAllPackages bool, onOutput func(line string)) error {
+	var cmd string
 	if removeAllPackages {
-		packages, err := c.List()
-		if err == nil && len(packages) > 0 {
-			onOutput("Removing all installed packages...\n")
-			cmd := fmt.Sprintf("%s del -r %s", VellumBin, strings.Join(packages, " "))
-			if err := c.executor.ExecuteStreaming(cmd, onOutput); err != nil {
-				return fmt.Errorf("failed to remove packages: %w", err)
-			}
-		}
+		onOutput("Removing Vellum and all packages...\n")
+		cmd = fmt.Sprintf("%s self uninstall --all -y", VellumBin)
+	} else {
+		onOutput("Removing Vellum...\n")
+		cmd = fmt.Sprintf("%s self uninstall -y", VellumBin)
 	}
-
-	onOutput("Removing Vellum...\n")
-	cmd := fmt.Sprintf("rm -rf %s", VellumRoot)
 	return c.executor.ExecuteStreaming(cmd, onOutput)
 }

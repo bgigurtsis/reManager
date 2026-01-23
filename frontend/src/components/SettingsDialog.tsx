@@ -251,6 +251,11 @@ export function SettingsDialog({
                   </Button>
                 ) : (
                   <div className="space-y-3">
+                    {uninstallOutput && (
+                      <div className="h-[100px] rounded-lg overflow-hidden">
+                        <TerminalWithCopy output={uninstallOutput} />
+                      </div>
+                    )}
                     <div className="flex items-center gap-2 text-sm text-destructive">
                       <AlertTriangle className="h-4 w-4" />
                       <span>This will remove Vellum from the device</span>
