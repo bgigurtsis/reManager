@@ -189,8 +189,8 @@ declare global {
           RespondToDialog(confirmed: boolean): Promise<void>
           CancelInstallation(): Promise<void>
           GetAppVersion(): Promise<string>
-          GetSettings(): Promise<{ tabVisibility: Record<string, boolean>; proxyMode: boolean; suppressSystemFileWarnings: boolean; theme: string }>
-          SaveSettings(tabVisibility: Record<string, boolean>, proxyMode: boolean, suppressSystemFileWarnings: boolean, theme: string): Promise<void>
+          GetSettings(): Promise<{ tabVisibility: Record<string, boolean>; proxyMode: boolean; suppressSystemFileWarnings: boolean; theme: string; terminalTheme: string; editorTheme: string }>
+          SaveSettings(tabVisibility: Record<string, boolean>, proxyMode: boolean, suppressSystemFileWarnings: boolean, theme: string, terminalTheme: string, editorTheme: string): Promise<void>
           UninstallVellum(removeAllPackages: boolean): Promise<void>
           GetDeviceTimezone(): Promise<string>
           GetTimezoneStatus(): Promise<TimezoneStatus>
@@ -297,6 +297,9 @@ export default function App() {
   const [proxyMode, setProxyMode] = useState(true)
   const [suppressSystemFileWarnings, setSuppressSystemFileWarnings] = useState(false)
   const [theme, setTheme] = useState('system')
+  const [terminalTheme, setTerminalTheme] = useState('match')
+  const [editorTheme, setEditorTheme] = useState('match')
+  const [systemPrefersDark, setSystemPrefersDark] = useState(() => window.matchMedia('(prefers-color-scheme: dark)').matches)
   const [dnsErrorShown, setDnsErrorShown] = useState(false)
   const [showDnsErrorModal, setShowDnsErrorModal] = useState(false)
   const [vellumUninstalling, setVellumUninstalling] = useState(false)
@@ -396,6 +399,27 @@ export default function App() {
     return Array.from(cats).sort()
   }, [packages])
 
+  const resolvedAppTheme = useMemo((): 'dark' | 'light' => {
+    if (theme === 'system') {
+      return systemPrefersDark ? 'dark' : 'light'
+    }
+    return theme === 'dark' ? 'dark' : 'light'
+  }, [theme, systemPrefersDark])
+
+  const resolvedTerminalTheme = useMemo((): 'dark' | 'light' => {
+    if (terminalTheme === 'match') {
+      return resolvedAppTheme
+    }
+    return terminalTheme === 'dark' ? 'dark' : 'light'
+  }, [terminalTheme, resolvedAppTheme])
+
+  const resolvedEditorTheme = useMemo((): 'dark' | 'light' => {
+    if (editorTheme === 'match') {
+      return resolvedAppTheme
+    }
+    return editorTheme === 'dark' ? 'dark' : 'light'
+  }, [editorTheme, resolvedAppTheme])
+
   const compareVersions = (a: string, b: string): number => {
     const aParts = a.split('.').map(p => parseInt(p.split('-')[0], 10) || 0)
     const bParts = b.split('.').map(p => parseInt(p.split('-')[0], 10) || 0)
@@ -488,12 +512,21 @@ export default function App() {
         const loadedTheme = settings?.theme || 'system'
         setTheme(loadedTheme)
         localStorage.setItem('theme', loadedTheme)
+        setTerminalTheme(settings?.terminalTheme || 'match')
+        setEditorTheme(settings?.editorTheme || 'match')
       } catch (err) {
         console.log('Could not load initial data:', err)
         setSelectedKey('__other__')
       }
     }
     loadInitialData()
+  }, [])
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
+    const handleChange = (e: MediaQueryListEvent) => setSystemPrefersDark(e.matches)
+    mediaQuery.addEventListener('change', handleChange)
+    return () => mediaQuery.removeEventListener('change', handleChange)
   }, [])
 
   useEffect(() => {
@@ -1210,19 +1243,21 @@ export default function App() {
     setSavedDevices(devices || [])
   }
 
-  const handleSaveSettings = async (newTabVisibility: Record<string, boolean>, newProxyMode: boolean, newSuppressSystemFileWarnings: boolean, newTheme: string) => {
+  const handleSaveSettings = async (newTabVisibility: Record<string, boolean>, newProxyMode: boolean, newSuppressSystemFileWarnings: boolean, newTheme: string, newTerminalTheme: string, newEditorTheme: string) => {
     setTabVisibility(newTabVisibility)
     setProxyMode(newProxyMode)
     setSuppressSystemFileWarnings(newSuppressSystemFileWarnings)
     setTheme(newTheme)
     localStorage.setItem('theme', newTheme)
     applyTheme(newTheme)
-    await window.go.main.App.SaveSettings(newTabVisibility, newProxyMode, newSuppressSystemFileWarnings, newTheme)
+    setTerminalTheme(newTerminalTheme)
+    setEditorTheme(newEditorTheme)
+    await window.go.main.App.SaveSettings(newTabVisibility, newProxyMode, newSuppressSystemFileWarnings, newTheme, newTerminalTheme, newEditorTheme)
   }
 
   const handleEnableProxyModeFromModal = async () => {
     setProxyMode(true)
-    await window.go.main.App.SaveSettings(tabVisibility, true, suppressSystemFileWarnings, theme)
+    await window.go.main.App.SaveSettings(tabVisibility, true, suppressSystemFileWarnings, theme, terminalTheme, editorTheme)
     setShowDnsErrorModal(false)
   }
 
@@ -1919,6 +1954,7 @@ export default function App() {
                   bootstrapOutput={bootstrapOutput}
                   bootstrapError={bootstrapError}
                   onInstall={() => window.go.main.App.BootstrapVellum()}
+                  terminalTheme={resolvedTerminalTheme}
                 />
               ) : osMismatchDetected && compatibilityStatus ? (
                 <div className={uninstallQueue.size > 0 ? 'pb-48' : ''}>
@@ -2509,6 +2545,7 @@ export default function App() {
                         isConnected={connectionStatus === 'connected'}
                         visible={activeTab === 'utilities'}
                         onRunningChange={setIsTerminalRunning}
+                        theme={resolvedTerminalTheme}
                       />
                     </CardContent>
                   </Card>
@@ -2901,6 +2938,7 @@ export default function App() {
               }}
               canStop={(installing || uninstalling) || currentRunningCommand !== null}
               onStop={(installing || uninstalling) ? handleCancelInstallation : handleStopCommand}
+              terminalTheme={resolvedTerminalTheme}
             />
           )}
         </DialogContent>
@@ -3009,6 +3047,8 @@ export default function App() {
         proxyMode={proxyMode}
         suppressSystemFileWarnings={suppressSystemFileWarnings}
         theme={theme}
+        terminalTheme={terminalTheme}
+        editorTheme={editorTheme}
         onSaveSettings={handleSaveSettings}
         onUninstallVellum={handleUninstallVellum}
         uninstalling={vellumUninstalling}
@@ -3120,7 +3160,7 @@ export default function App() {
                 </Button>
               </div>
 
-              <ConfigEditor isConnected={connectionStatus === 'connected'} />
+              <ConfigEditor isConnected={connectionStatus === 'connected'} theme={resolvedEditorTheme} />
             </div>
           </div>
         </div>

@@ -2523,6 +2523,8 @@ type SettingsInfo struct {
 	ProxyMode                  bool            `json:"proxyMode"`
 	SuppressSystemFileWarnings bool            `json:"suppressSystemFileWarnings"`
 	Theme                      string          `json:"theme"`
+	TerminalTheme              string          `json:"terminalTheme"`
+	EditorTheme                string          `json:"editorTheme"`
 }
 
 func (a *App) GetSettings() SettingsInfo {
@@ -2532,6 +2534,8 @@ func (a *App) GetSettings() SettingsInfo {
 			ProxyMode:                  true,
 			SuppressSystemFileWarnings: false,
 			Theme:                      "system",
+			TerminalTheme:              "match",
+			EditorTheme:                "match",
 		}
 	}
 	settings, err := a.settingsStore.Load()
@@ -2541,6 +2545,8 @@ func (a *App) GetSettings() SettingsInfo {
 			ProxyMode:                  true,
 			SuppressSystemFileWarnings: false,
 			Theme:                      "system",
+			TerminalTheme:              "match",
+			EditorTheme:                "match",
 		}
 	}
 	return SettingsInfo{
@@ -2548,10 +2554,12 @@ func (a *App) GetSettings() SettingsInfo {
 		ProxyMode:                  settings.ProxyMode,
 		SuppressSystemFileWarnings: settings.SuppressSystemFileWarnings,
 		Theme:                      settings.Theme,
+		TerminalTheme:              settings.TerminalTheme,
+		EditorTheme:                settings.EditorTheme,
 	}
 }
 
-func (a *App) SaveSettings(tabVisibility map[string]bool, proxyMode bool, suppressSystemFileWarnings bool, theme string) error {
+func (a *App) SaveSettings(tabVisibility map[string]bool, proxyMode bool, suppressSystemFileWarnings bool, theme string, terminalTheme string, editorTheme string) error {
 	if a.settingsStore == nil {
 		return fmt.Errorf("settings store not initialized")
 	}
@@ -2560,6 +2568,8 @@ func (a *App) SaveSettings(tabVisibility map[string]bool, proxyMode bool, suppre
 		ProxyMode:                  proxyMode,
 		SuppressSystemFileWarnings: suppressSystemFileWarnings,
 		Theme:                      theme,
+		TerminalTheme:              terminalTheme,
+		EditorTheme:                editorTheme,
 	}
 	return a.settingsStore.Save(settings)
 }
