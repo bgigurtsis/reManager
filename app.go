@@ -1248,6 +1248,9 @@ func (a *App) StopShell() {
 	stdin := a.shellStdin
 	a.shellMu.Unlock()
 
+	if session != nil {
+		session.Signal(ssh.SIGHUP)
+	}
 	if stdin != nil {
 		stdin.Close()
 	}
