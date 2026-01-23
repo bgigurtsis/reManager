@@ -1075,6 +1075,18 @@ export default function App() {
       setConnectionStatus('connected')
       setConnectionError(null)
       setReconnectAttempt(0)
+
+      try {
+        const info = await window.go.main.App.GetDeviceInfo()
+        debugLog('Refreshed device info on reconnect:', info)
+        setDeviceInfo(info)
+        if (data.device) {
+          setDevice(data.device)
+        }
+      } catch (err) {
+        debugLog('Failed to refresh device info on reconnect:', err)
+      }
+
       await rescanAllPackages()
     })
 
