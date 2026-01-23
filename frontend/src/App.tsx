@@ -1235,6 +1235,7 @@ export default function App() {
     setVellumUninstalling(false)
     setVellumUninstallOutput('')
     setConnectionError(null)
+    setConnectionStatus('connected')
     setReconnectAttempt(0)
     setShowFileBrowser(false)
     setShowConfigEditor(false)
