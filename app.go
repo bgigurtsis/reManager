@@ -18,6 +18,8 @@ import (
 	"github.com/pkg/sftp"
 	"github.com/rymdport/portal/filechooser"
 	"github.com/rymdport/portal/openuri"
+	"github.com/rymdport/portal/settings"
+	"github.com/rymdport/portal/settings/appearance"
 	"github.com/skratchdot/open-golang/open"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 	"golang.org/x/crypto/ssh"
@@ -29,6 +31,7 @@ import (
 	"reManager/internal/device"
 	"reManager/internal/executor"
 	"reManager/internal/installer"
+	"reManager/internal/platform"
 	"reManager/internal/storage"
 	"reManager/internal/vellum"
 )
@@ -45,13 +48,8 @@ func debugln(args ...interface{}) {
 	}
 }
 
-func isRunningInFlatpak() bool {
-	_, err := os.Stat("/.flatpak-info")
-	return err == nil
-}
-
 func openFileDialog(ctx context.Context, title string) (string, error) {
-	if isRunningInFlatpak() {
+	if platform.IsRunningInFlatpak() {
 		home, _ := os.UserHomeDir()
 		files, err := filechooser.OpenFile("", title, &filechooser.OpenFileOptions{
 			CurrentFolder: home,
@@ -72,7 +70,7 @@ func openFileDialog(ctx context.Context, title string) (string, error) {
 }
 
 func saveFileDialog(ctx context.Context, title, defaultFilename string) (string, error) {
-	if isRunningInFlatpak() {
+	if platform.IsRunningInFlatpak() {
 		home, _ := os.UserHomeDir()
 		files, err := filechooser.SaveFile("", title, &filechooser.SaveFileOptions{
 			CurrentFolder: home,
@@ -151,6 +149,26 @@ func (a *App) startup(ctx context.Context) {
 	if err := a.metadata.Load(); err != nil {
 		fmt.Printf("Warning: could not load metadata: %v\n", err)
 	}
+
+	go func() {
+		settings.OnSignalSettingChanged(func(changed settings.Changed) {
+			if changed.Namespace == appearance.Namespace && changed.Key == "color-scheme" {
+				scheme, err := appearance.ValueToColorScheme(changed.Value)
+				if err == nil {
+					var themeName string
+					switch scheme {
+					case appearance.Dark:
+						themeName = "dark"
+					case appearance.Light:
+						themeName = "light"
+					default:
+						themeName = "unknown"
+					}
+					runtime.EventsEmit(a.ctx, "system-theme-changed", themeName)
+				}
+			}
+		})
+	}()
 }
 
 func (a *App) shutdown(ctx context.Context) {
@@ -2574,6 +2592,21 @@ func (a *App) SaveSettings(tabVisibility map[string]bool, proxyMode bool, suppre
 	return a.settingsStore.Save(settings)
 }
 
+func (a *App) GetSystemColorScheme() string {
+	scheme, err := appearance.GetColorScheme()
+	if err != nil {
+		return "unknown"
+	}
+	switch scheme {
+	case appearance.Dark:
+		return "dark"
+	case appearance.Light:
+		return "light"
+	default:
+		return "unknown"
+	}
+}
+
 func (a *App) UninstallVellum(removeAllPackages bool) {
 	go func() {
 		if a.vellumClient == nil {
@@ -3433,7 +3466,7 @@ func (a *App) CancelBackup() {
 func (a *App) RevealInFileManager(path string) {
 	dir := filepath.Dir(path)
 
-	if isRunningInFlatpak() {
+	if platform.IsRunningInFlatpak() {
 		file, err := os.Open(dir)
 		if err != nil {
 			open.Start(dir)

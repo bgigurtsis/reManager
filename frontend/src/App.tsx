@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
-import { applyTheme } from './main'
+import { applyThemeWithPortal } from './main'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -191,6 +191,7 @@ declare global {
           GetAppVersion(): Promise<string>
           GetSettings(): Promise<{ tabVisibility: Record<string, boolean>; proxyMode: boolean; suppressSystemFileWarnings: boolean; theme: string; terminalTheme: string; editorTheme: string }>
           SaveSettings(tabVisibility: Record<string, boolean>, proxyMode: boolean, suppressSystemFileWarnings: boolean, theme: string, terminalTheme: string, editorTheme: string): Promise<void>
+          GetSystemColorScheme(): Promise<string>
           UninstallVellum(removeAllPackages: boolean): Promise<void>
           GetDeviceTimezone(): Promise<string>
           GetTimezoneStatus(): Promise<TimezoneStatus>
@@ -523,10 +524,30 @@ export default function App() {
   }, [])
 
   useEffect(() => {
+    window.go.main.App.GetSystemColorScheme().then((scheme: string) => {
+      if (scheme === 'dark' || scheme === 'light') {
+        setSystemPrefersDark(scheme === 'dark')
+      }
+    }).catch(() => {})
+
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
     const handleChange = (e: MediaQueryListEvent) => setSystemPrefersDark(e.matches)
     mediaQuery.addEventListener('change', handleChange)
-    return () => mediaQuery.removeEventListener('change', handleChange)
+
+    let unsubscribeTheme: (() => void) | undefined
+    if (typeof window.runtime !== 'undefined') {
+      unsubscribeTheme = window.runtime.EventsOn('system-theme-changed', (...args: unknown[]) => {
+        const scheme = args[0] as string
+        if (scheme === 'dark' || scheme === 'light') {
+          setSystemPrefersDark(scheme === 'dark')
+        }
+      })
+    }
+
+    return () => {
+      mediaQuery.removeEventListener('change', handleChange)
+      unsubscribeTheme?.()
+    }
   }, [])
 
   useEffect(() => {
@@ -1250,7 +1271,7 @@ export default function App() {
     setSuppressSystemFileWarnings(newSuppressSystemFileWarnings)
     setTheme(newTheme)
     localStorage.setItem('theme', newTheme)
-    applyTheme(newTheme)
+    await applyThemeWithPortal(newTheme)
     setTerminalTheme(newTerminalTheme)
     setEditorTheme(newEditorTheme)
     await window.go.main.App.SaveSettings(newTabVisibility, newProxyMode, newSuppressSystemFileWarnings, newTheme, newTerminalTheme, newEditorTheme)
