@@ -558,6 +558,12 @@ export default function App() {
   }, [activeTab, step])
 
   useEffect(() => {
+    if (!updateServiceStatus.enabled) {
+      setShowAutoUpdateBanner(false)
+    }
+  }, [updateServiceStatus.enabled])
+
+  useEffect(() => {
     if (activeTab === 'mods' && !tabVisibility.mods) {
       setActiveTab('maintenance')
     }
@@ -728,6 +734,8 @@ export default function App() {
           setCommandRunning(false)
           setRunningSystemTask(null)
           setSettingTimezone(false)
+          const status = await window.go.main.App.GetUpdateServiceStatus()
+          setUpdateServiceStatus(status)
         }
         return
       }
@@ -1088,6 +1096,27 @@ export default function App() {
       }
 
       await rescanAllPackages()
+
+      try {
+        const [updateStatus, hashtabStatus, tzStatus] = await Promise.all([
+          window.go.main.App.GetUpdateServiceStatus(),
+          window.go.main.App.CheckHashtabVersion(),
+          window.go.main.App.GetTimezoneStatus(),
+        ])
+        setUpdateServiceStatus(updateStatus)
+        if (hashtabStatus.needsRebuild) {
+          setHashtabMismatch(hashtabStatus)
+        } else {
+          setHashtabMismatch(null)
+        }
+        if (tzStatus.needsUpdate) {
+          setTimezoneMismatch(tzStatus)
+        } else {
+          setTimezoneMismatch(null)
+        }
+      } catch (err) {
+        debugLog('Failed to refresh status on reconnect:', err)
+      }
     })
 
     const unsubscribeConnectionFailed = window.runtime.EventsOn('connection:failed', (...args: unknown[]) => {
