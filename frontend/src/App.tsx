@@ -24,6 +24,7 @@ import { FileBrowser } from '@/components/FileBrowser'
 import { ConfigEditor } from '@/components/ConfigEditor'
 import { BackupRestoreDialog } from '@/components/BackupRestore'
 import { DnsErrorModal } from '@/components/DnsErrorModal'
+import { FilesystemRestoreErrorDialog } from '@/components/FilesystemRestoreErrorDialog'
 import { TimezoneCombobox } from '@/components/TimezoneCombobox'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { Badge } from '@/components/ui/badge'
@@ -217,6 +218,8 @@ declare global {
           RestoreDeviceBackup(archivePath: string): void
           CancelBackup(): void
           RevealInFileManager(path: string): void
+          RetryRestoreFilesystem(): Promise<void>
+          RebootDevice(): Promise<void>
         }
       }
     }
@@ -385,6 +388,9 @@ export default function App() {
   const [reconnectAttempt, setReconnectAttempt] = useState(0)
   const [reconnectMaxAttempts, setReconnectMaxAttempts] = useState(0)
   const [connectionError, setConnectionError] = useState<string | null>(null)
+
+  const [showFilesystemRestoreError, setShowFilesystemRestoreError] = useState(false)
+  const [isRetryingFilesystemRestore, setIsRetryingFilesystemRestore] = useState(false)
 
   const [search, setSearch] = useState('')
   const [categoryFilter, setCategoryFilter] = useState('all')
@@ -1137,6 +1143,12 @@ export default function App() {
       setConnectionError(data.reason)
     })
 
+    const unsubscribeFilesystemRestoreError = window.runtime.EventsOn('filesystem:restore-error', (...args: unknown[]) => {
+      const data = args[0] as { message: string }
+      debugLog('Received filesystem:restore-error:', data)
+      setShowFilesystemRestoreError(true)
+    })
+
     return () => {
       unsubscribeOutput()
       unsubscribeDone()
@@ -1170,6 +1182,7 @@ export default function App() {
       unsubscribeConnectionReconnecting()
       unsubscribeConnectionRestored()
       unsubscribeConnectionFailed()
+      unsubscribeFilesystemRestoreError()
     }
   }, [])
 
@@ -1325,6 +1338,26 @@ export default function App() {
       setVellumUninstallError(null)
       setVellumUninstallSuccess(false)
     }
+  }
+
+  const handleFilesystemRestoreRetry = async () => {
+    setIsRetryingFilesystemRestore(true)
+    try {
+      await window.go.main.App.RetryRestoreFilesystem()
+      setShowFilesystemRestoreError(false)
+    } catch (err) {
+      debugLog('Filesystem restore retry failed:', err)
+    }
+    setIsRetryingFilesystemRestore(false)
+  }
+
+  const handleFilesystemRestoreReboot = async () => {
+    await window.go.main.App.RebootDevice()
+    setShowFilesystemRestoreError(false)
+  }
+
+  const handleFilesystemRestoreDismiss = () => {
+    setShowFilesystemRestoreError(false)
   }
 
   const handleSaveSettings = async (newTabVisibility: Record<string, boolean>, newProxyMode: boolean, newSuppressSystemFileWarnings: boolean, newTheme: string, newTerminalTheme: string, newEditorTheme: string) => {
@@ -3165,6 +3198,14 @@ export default function App() {
         open={showDnsErrorModal}
         onClose={() => setShowDnsErrorModal(false)}
         onEnableProxyMode={handleEnableProxyModeFromModal}
+      />
+
+      <FilesystemRestoreErrorDialog
+        open={showFilesystemRestoreError}
+        onRetry={handleFilesystemRestoreRetry}
+        onReboot={handleFilesystemRestoreReboot}
+        onDismiss={handleFilesystemRestoreDismiss}
+        isRetrying={isRetryingFilesystemRestore}
       />
 
       {showFileBrowser && (
