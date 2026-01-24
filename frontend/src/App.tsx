@@ -220,6 +220,9 @@ declare global {
           RevealInFileManager(path: string): void
           RetryRestoreFilesystem(): Promise<void>
           RebootDevice(): Promise<void>
+          IsSleepScreenSupported(): Promise<boolean>
+          SetSleepScreen(imagePath: string): Promise<void>
+          RestartXochitl(): Promise<void>
         }
       }
     }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -3691,4 +3693,136 @@ func (a *App) RevealInFileManager(path string) {
 	}
 
 	open.Start(dir)
+}
+
+func (a *App) IsSleepScreenSupported() bool {
+	a.mu.Lock()
+	client := a.client
+	a.mu.Unlock()
+
+	if client == nil {
+		return false
+	}
+
+	output, err := a.runCommand("grep REMARKABLE_RELEASE_VERSION /usr/share/remarkable/update.conf")
+	if err != nil {
+		output, err = a.runCommand("grep IMG_VERSION /etc/os-release")
+		if err != nil {
+			return false
+		}
+	}
+
+	parts := strings.SplitN(output, "=", 2)
+	if len(parts) != 2 {
+		return false
+	}
+	version := strings.Trim(strings.TrimSpace(parts[1]), "\"")
+
+	versionParts := strings.Split(version, ".")
+	if len(versionParts) < 2 {
+		return false
+	}
+
+	major, err := strconv.Atoi(versionParts[0])
+	if err != nil {
+		return false
+	}
+	minor, err := strconv.Atoi(versionParts[1])
+	if err != nil {
+		return false
+	}
+
+	// Supported: 3.2-3.13 or 3.20+
+	if major == 3 {
+		return (minor >= 2 && minor <= 13) || minor >= 20
+	}
+	return major > 3
+}
+
+func (a *App) SetSleepScreen(imagePath string) error {
+	a.mu.Lock()
+	client := a.client
+	a.mu.Unlock()
+
+	if client == nil {
+		return fmt.Errorf("not connected")
+	}
+
+	sftpClient, err := sftp.NewClient(client)
+	if err != nil {
+		return fmt.Errorf("failed to create SFTP client: %w", err)
+	}
+	defer sftpClient.Close()
+
+	configPath := "/home/root/.config/remarkable/xochitl.conf"
+
+	file, err := sftpClient.Open(configPath)
+	if err != nil {
+		return fmt.Errorf("failed to open config file: %w", err)
+	}
+	content, err := io.ReadAll(file)
+	file.Close()
+	if err != nil {
+		return fmt.Errorf("failed to read config file: %w", err)
+	}
+
+	cfg, err := ini.Load(content)
+	if err != nil {
+		return fmt.Errorf("invalid config file syntax: %w", err)
+	}
+
+	section := cfg.Section("General")
+	section.Key("SleepScreenPath").SetValue(imagePath)
+
+	var buf bytes.Buffer
+	_, err = cfg.WriteTo(&buf)
+	if err != nil {
+		return fmt.Errorf("failed to serialize config: %w", err)
+	}
+
+	tmpPath := configPath + ".tmp"
+	tmpFile, err := sftpClient.Create(tmpPath)
+	if err != nil {
+		return fmt.Errorf("failed to create temp file: %w", err)
+	}
+
+	_, err = tmpFile.Write(buf.Bytes())
+	if err != nil {
+		tmpFile.Close()
+		sftpClient.Remove(tmpPath)
+		return fmt.Errorf("failed to write to temp file: %w", err)
+	}
+	tmpFile.Close()
+
+	_ = sftpClient.Remove(configPath)
+	err = sftpClient.Rename(tmpPath, configPath)
+	if err != nil {
+		sftpClient.Remove(tmpPath)
+		return fmt.Errorf("failed to rename temp file: %w", err)
+	}
+
+	return nil
+}
+
+func (a *App) RestartXochitl() error {
+	a.mu.Lock()
+	client := a.client
+	a.mu.Unlock()
+
+	if client == nil {
+		return fmt.Errorf("not connected")
+	}
+
+	session, err := client.NewSession()
+	if err != nil {
+		return fmt.Errorf("failed to create session: %w", err)
+	}
+	defer session.Close()
+
+	_, err = session.CombinedOutput("systemctl restart xochitl")
+	if err != nil {
+		return fmt.Errorf("failed to restart xochitl: %w", err)
+	}
+
+	return nil
 }
