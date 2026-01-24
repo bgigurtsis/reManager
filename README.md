@@ -37,7 +37,12 @@ Please direct:
 ## Installation
 
 ### Linux
+#### Flathub
+```shell
+flatpak install flathub io.scottlabs.reManager
+```
 
+#### Manual
 Download and run the [latest release](https://github.com/rmitchellscott/reManager/releases/latest):
 - Flatpak
 - Binaries
