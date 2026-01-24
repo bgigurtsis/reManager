@@ -16,6 +16,8 @@ import { PackageDetailPanel } from '@/components/PackageDetailPanel'
 import { ConsolidatedWarningBanner } from '@/components/ConsolidatedWarningBanner'
 import { UpgradeChecklist } from '@/components/UpgradeChecklist'
 import { VellumInstallPrompt } from '@/components/VellumInstallPrompt'
+import { VellumInstallSuccessDialog } from '@/components/VellumInstallSuccessDialog'
+import { VellumUninstallSuccessDialog } from '@/components/VellumUninstallSuccessDialog'
 import { SettingsDialog } from '@/components/SettingsDialog'
 import { InteractiveTerminal } from '@/components/InteractiveTerminal'
 import { FileBrowser } from '@/components/FileBrowser'
@@ -247,6 +249,7 @@ export default function App() {
   const [bootstrapping, setBootstrapping] = useState(false)
   const [bootstrapOutput, setBootstrapOutput] = useState('')
   const [bootstrapError, setBootstrapError] = useState<string | null>(null)
+  const [bootstrapSuccess, setBootstrapSuccess] = useState(false)
   const [installing, setInstalling] = useState(false)
   const [output, setOutput] = useState('')
   const [currentComponent, setCurrentComponent] = useState('')
@@ -307,6 +310,8 @@ export default function App() {
   const [showDnsErrorModal, setShowDnsErrorModal] = useState(false)
   const [vellumUninstalling, setVellumUninstalling] = useState(false)
   const [vellumUninstallOutput, setVellumUninstallOutput] = useState('')
+  const [vellumUninstallError, setVellumUninstallError] = useState<string | null>(null)
+  const [vellumUninstallSuccess, setVellumUninstallSuccess] = useState(false)
 
   const [showProgressModal, setShowProgressModal] = useState(false)
   const [progressModalType, setProgressModalType] = useState<'install' | 'maintenance' | null>(null)
@@ -882,6 +887,7 @@ export default function App() {
       setBootstrapping(true)
       setBootstrapOutput('')
       setBootstrapError(null)
+      setBootstrapSuccess(false)
     })
 
     const unsubscribeBootstrapOutput = window.runtime.EventsOn('vellum:bootstrap-output', (...args: unknown[]) => {
@@ -892,6 +898,7 @@ export default function App() {
     const unsubscribeBootstrapComplete = window.runtime.EventsOn('vellum:bootstrap-complete', () => {
       debugLog('Received vellum:bootstrap-complete')
       setBootstrapping(false)
+      setBootstrapSuccess(true)
       setVellumInstalled(true)
     })
 
@@ -911,6 +918,8 @@ export default function App() {
       debugLog('Received vellum:uninstall-start')
       setVellumUninstalling(true)
       setVellumUninstallOutput('')
+      setVellumUninstallError(null)
+      setVellumUninstallSuccess(false)
     })
 
     const unsubscribeVellumUninstallOutput = window.runtime.EventsOn('vellum:uninstall-output', (...args: unknown[]) => {
@@ -923,13 +932,14 @@ export default function App() {
       setVellumUninstalling(false)
       setVellumInstalled(false)
       setShowSettingsDialog(false)
+      setVellumUninstallSuccess(true)
     })
 
     const unsubscribeVellumUninstallError = window.runtime.EventsOn('vellum:uninstall-error', (...args: unknown[]) => {
       const errMsg = args[0] as string
       debugLog('Received vellum:uninstall-error:', errMsg)
       setVellumUninstalling(false)
-      setVellumUninstallOutput((prev) => prev + '\nError: ' + errMsg)
+      setVellumUninstallError(errMsg)
     })
 
     const unsubscribeHashtabMismatch = window.runtime.EventsOn('hashtab:version-mismatch', (...args: unknown[]) => {
@@ -1306,6 +1316,15 @@ export default function App() {
 
     const devices = await window.go.main.App.GetSavedDevices()
     setSavedDevices(devices || [])
+  }
+
+  const handleSettingsDialogOpenChange = (open: boolean) => {
+    setShowSettingsDialog(open)
+    if (!open) {
+      setVellumUninstallOutput('')
+      setVellumUninstallError(null)
+      setVellumUninstallSuccess(false)
+    }
   }
 
   const handleSaveSettings = async (newTabVisibility: Record<string, boolean>, newProxyMode: boolean, newSuppressSystemFileWarnings: boolean, newTheme: string, newTerminalTheme: string, newEditorTheme: string) => {
@@ -2013,7 +2032,7 @@ export default function App() {
 
             {tabVisibility.mods && (
             <TabsContent value="mods">
-              {vellumInstalled === false ? (
+              {vellumInstalled === null ? null : vellumInstalled === false ? (
                 <VellumInstallPrompt
                   bootstrapping={bootstrapping}
                   bootstrapOutput={bootstrapOutput}
@@ -3105,7 +3124,7 @@ export default function App() {
 
       <SettingsDialog
         open={showSettingsDialog}
-        onOpenChange={setShowSettingsDialog}
+        onOpenChange={handleSettingsDialogOpenChange}
         isConnected={!!device}
         vellumInstalled={vellumInstalled}
         tabVisibility={tabVisibility}
@@ -3118,7 +3137,28 @@ export default function App() {
         onUninstallVellum={handleUninstallVellum}
         uninstalling={vellumUninstalling}
         uninstallOutput={vellumUninstallOutput}
+        uninstallError={vellumUninstallError}
         appVersion={appVersion}
+      />
+
+      <VellumInstallSuccessDialog
+        open={bootstrapSuccess}
+        onOpenChange={(open) => {
+          if (!open) {
+            setBootstrapSuccess(false)
+            setBootstrapOutput('')
+          }
+        }}
+      />
+
+      <VellumUninstallSuccessDialog
+        open={vellumUninstallSuccess}
+        onOpenChange={(open) => {
+          if (!open) {
+            setVellumUninstallSuccess(false)
+            setVellumUninstallOutput('')
+          }
+        }}
       />
 
       <DnsErrorModal
