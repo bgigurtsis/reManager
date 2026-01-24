@@ -201,6 +201,7 @@ declare global {
           ListDirectory(path: string): Promise<{ name: string; path: string; size: number; isDir: boolean; modTime: number; mode: string }[]>
           DownloadFile(remotePath: string): void
           UploadFile(remotePath: string): void
+          UploadFilesFromPaths(localPaths: string[], remotePath: string): void
           DeletePath(path: string): Promise<void>
           RenamePath(oldPath: string, newPath: string): Promise<void>
           CreateDirectory(path: string): Promise<void>
@@ -3172,6 +3173,7 @@ export default function App() {
               <FileBrowser
                 isConnected={connectionStatus === 'connected'}
                 suppressSystemFileWarnings={suppressSystemFileWarnings}
+                isVisible={showFileBrowser}
               />
             </div>
           </div>
