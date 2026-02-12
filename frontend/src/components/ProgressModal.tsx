@@ -2,7 +2,7 @@ import { DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { Progress } from '@/components/ui/progress'
 import { Button } from '@/components/ui/button'
 import { TerminalWithCopy } from '@/components/TerminalWithCopy'
-import { Loader2 } from 'lucide-react'
+import { Loader2, CheckCircle2 } from 'lucide-react'
 
 interface ProgressModalProps {
   title: string
@@ -38,9 +38,16 @@ export function ProgressModal({
           {progressText}
         </p>
         <Progress value={percentage} />
-        <div className="h-[400px] rounded-lg overflow-hidden overscroll-y-contain">
-          <TerminalWithCopy output={terminalOutput} theme={terminalTheme} />
-        </div>
+        {isComplete && !terminalOutput.trim() ? (
+          <div className="h-[400px] rounded-lg flex flex-col items-center justify-center gap-3">
+            <CheckCircle2 className="h-12 w-12 text-green-600 dark:text-green-400" />
+            <p className="text-sm text-muted-foreground">Operation completed successfully.</p>
+          </div>
+        ) : (
+          <div className="h-[400px] rounded-lg overflow-hidden overscroll-y-contain">
+            <TerminalWithCopy output={terminalOutput} theme={terminalTheme} />
+          </div>
+        )}
       </div>
       <DialogFooter>
         {isComplete ? (

@@ -18,6 +18,7 @@ interface UpgradeChecklistProps {
   hashtabMismatch?: boolean
   timezoneMismatch?: boolean
   onGoToMaintenance: () => void
+  onSelectPackage: (name: string, targetOS: string, isCompatible: boolean) => void
 }
 
 export function UpgradeChecklist({
@@ -35,6 +36,7 @@ export function UpgradeChecklist({
   hashtabMismatch = false,
   timezoneMismatch = false,
   onGoToMaintenance,
+  onSelectPackage,
 }: UpgradeChecklistProps) {
   const canUpgrade = incompatiblePackages.length === 0
 
@@ -87,7 +89,12 @@ export function UpgradeChecklist({
                   {compatiblePackages.map(pkg => (
                     <div key={pkg} className="px-3 py-2 text-sm flex items-center gap-2">
                       <Check className="h-4 w-4 text-green-500" />
-                      <span>{pkg}</span>
+                      <button
+                        onClick={() => onSelectPackage(pkg, currentOsVersion, true)}
+                        className="text-primary hover:underline text-left"
+                      >
+                        {pkg}
+                      </button>
                     </div>
                   ))}
                 </div>
@@ -117,7 +124,12 @@ export function UpgradeChecklist({
                       >
                         <div className="flex items-center gap-2">
                           <X className="h-4 w-4 text-destructive" />
-                          <span>{pkg}</span>
+                          <button
+                            onClick={() => onSelectPackage(pkg, currentOsVersion, false)}
+                            className="text-primary hover:underline text-left"
+                          >
+                            {pkg}
+                          </button>
                         </div>
                         {isQueued ? (
                           <Button

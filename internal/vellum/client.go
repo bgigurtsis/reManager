@@ -127,6 +127,25 @@ type CompatibilityResult struct {
 }
 
 var osUpgradeRegex = regexp.MustCompile(`OS updated \(([^\s]+) → ([^\s]+)\)`)
+var installedPkgRegex = regexp.MustCompile(`^.+-(\d+\.\d+\.\d+-r\d+)\s+\S+\s+\{([^}]+)\}`)
+
+func (c *Client) ListInstalledWithVersions() (map[string]string, error) {
+	cmd := fmt.Sprintf("%s list -I", VellumBin)
+	output, err := c.executor.ExecuteWithOutput(cmd)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make(map[string]string)
+	for _, line := range strings.Split(output, "\n") {
+		if matches := installedPkgRegex.FindStringSubmatch(line); len(matches) >= 3 {
+			pkgName := matches[2]
+			version := matches[1]
+			result[pkgName] = version
+		}
+	}
+	return result, nil
+}
 
 func (c *Client) ListWithOsCheck() (*ListResult, error) {
 	cmd := fmt.Sprintf("%s info -q", VellumBin)

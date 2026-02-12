@@ -909,6 +909,7 @@ func (a *App) checkConnection() error {
 
 func (a *App) handleConnectionLost(err error) {
 	a.mu.Lock()
+	hadCommandSession := a.commandSession != nil
 	if a.commandSession != nil {
 		a.commandSession.Close()
 		a.commandSession = nil
@@ -923,8 +924,9 @@ func (a *App) handleConnectionLost(err error) {
 	a.keepaliveStop = nil
 	a.mu.Unlock()
 
-	runtime.EventsEmit(a.ctx, "command:output", "\nConnection lost.\n")
-	runtime.EventsEmit(a.ctx, "command:done", false)
+	if hadCommandSession {
+		runtime.EventsEmit(a.ctx, "command:output", "\nConnection lost.\n")
+	}
 
 	ue := apperrors.Classify(err)
 	runtime.EventsEmit(a.ctx, "connection:lost", map[string]interface{}{
@@ -1695,22 +1697,68 @@ func (a *App) GetInstalledPackagesWithOsCheck() InstalledPackagesResult {
 	}
 }
 
+func (a *App) GetInstalledPackagesWithVersions() map[string]string {
+	if a.vellumClient == nil {
+		return map[string]string{}
+	}
+
+	versions, err := a.vellumClient.ListInstalledWithVersions()
+	if err != nil {
+		fmt.Printf("Error getting installed packages with versions: %v\n", err)
+		return map[string]string{}
+	}
+
+	result := make(map[string]string)
+	for pkg, version := range versions {
+		if !hiddenPackages[pkg] {
+			result[pkg] = version
+		}
+	}
+	return result
+}
+
+func (a *App) GetPackageForOS(name, targetOS, deviceType, arch string) *PackageInfo {
+	if a.metadata == nil {
+		return nil
+	}
+
+	pkg := a.metadata.GetPackageForTargetOS(name, targetOS, deviceType, arch)
+	if pkg == nil {
+		return nil
+	}
+
+	return &PackageInfo{
+		Name:           pkg.Name,
+		Version:        pkg.Version,
+		Description:    pkg.Description,
+		UpstreamAuthor: pkg.UpstreamAuthor,
+		Categories:     pkg.Categories,
+		URL:            pkg.URL,
+		License:        pkg.License,
+		Devices:        pkg.Devices,
+		Depends:        pkg.Depends,
+		Conflicts:      pkg.Conflicts,
+		OSMin:          pkg.OSMin,
+		OSMax:          pkg.OSMax,
+		OSConstraints:  pkg.OSConstraints,
+	}
+}
+
 func (a *App) RunReenable() {
 	if a.vellumClient == nil {
 		return
 	}
 
-	runtime.EventsEmit(a.ctx, "terminal:clear")
-	runtime.EventsEmit(a.ctx, "terminal:output", "Running vellum reenable...\n")
+	runtime.EventsEmit(a.ctx, "command:output", "Running vellum reenable...\n")
 
 	err := a.vellumClient.ReenableStreaming(func(line string) {
-		runtime.EventsEmit(a.ctx, "terminal:output", line+"\n")
+		runtime.EventsEmit(a.ctx, "command:output", line+"\n")
 	})
 
 	if err != nil {
-		runtime.EventsEmit(a.ctx, "terminal:output", fmt.Sprintf("\nError: %v\n", err))
+		runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("\nError: %v\n", err))
 	} else {
-		runtime.EventsEmit(a.ctx, "terminal:output", "\nReenable completed successfully.\n")
+		runtime.EventsEmit(a.ctx, "command:output", "\nReenable completed successfully.\n")
 	}
 }
 
@@ -1734,12 +1782,11 @@ func (a *App) RunPackageUpgrade() {
 	}
 
 	go func() {
-		runtime.EventsEmit(a.ctx, "terminal:clear")
-		runtime.EventsEmit(a.ctx, "terminal:output", "Running vellum upgrade...\n")
+		runtime.EventsEmit(a.ctx, "command:output", "Running vellum upgrade...\n")
 
 		var dnsError bool
 		err := a.vellumClient.UpgradeStreaming(func(line string) {
-			runtime.EventsEmit(a.ctx, "terminal:output", line+"\n")
+			runtime.EventsEmit(a.ctx, "command:output", line+"\n")
 			if strings.Contains(strings.ToLower(line), "dns:") {
 				dnsError = true
 			}
@@ -1747,9 +1794,9 @@ func (a *App) RunPackageUpgrade() {
 
 		success := err == nil
 		if success {
-			runtime.EventsEmit(a.ctx, "terminal:output", "\nPackage upgrade completed.\n")
+			runtime.EventsEmit(a.ctx, "command:output", "\nPackage upgrade completed.\n")
 		} else {
-			runtime.EventsEmit(a.ctx, "terminal:output", fmt.Sprintf("\nUpgrade error: %v\n", err))
+			runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("\nUpgrade error: %v\n", err))
 		}
 		runtime.EventsEmit(a.ctx, "package-upgrade:complete", map[string]interface{}{
 			"success":  success,
@@ -1895,7 +1942,7 @@ func (a *App) RunUpgrade() {
 		}
 
 		if osState.Mismatch {
-			runtime.EventsEmit(a.ctx, "terminal:output", fmt.Sprintf("Checking package compatibility with OS %s...\n", osState.CurrentVersion))
+			runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("Checking package compatibility with OS %s...\n", osState.CurrentVersion))
 
 			compat, err := a.vellumClient.CheckOSCompatibility(osState.CurrentVersion)
 			if err != nil && compat.FetchFailed {
@@ -1913,22 +1960,21 @@ func (a *App) RunUpgrade() {
 				return
 			}
 
-			runtime.EventsEmit(a.ctx, "terminal:output", "All packages compatible. Proceeding with upgrade...\n\n")
+			runtime.EventsEmit(a.ctx, "command:output", "All packages compatible. Proceeding with upgrade...\n\n")
 		}
 
-		runtime.EventsEmit(a.ctx, "terminal:clear")
-		runtime.EventsEmit(a.ctx, "terminal:output", "Running vellum upgrade...\n")
+		runtime.EventsEmit(a.ctx, "command:output", "Running vellum upgrade...\n")
 
 		var dnsError bool
 		err = a.vellumClient.UpgradeStreaming(func(line string) {
-			runtime.EventsEmit(a.ctx, "terminal:output", line+"\n")
+			runtime.EventsEmit(a.ctx, "command:output", line+"\n")
 			if strings.Contains(strings.ToLower(line), "dns:") {
 				dnsError = true
 			}
 		})
 
 		if err != nil {
-			runtime.EventsEmit(a.ctx, "terminal:output", fmt.Sprintf("\nUpgrade error: %v\n", err))
+			runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("\nUpgrade error: %v\n", err))
 			runtime.EventsEmit(a.ctx, "upgrade:complete", map[string]interface{}{
 				"success":  false,
 				"dnsError": dnsError,
@@ -1936,7 +1982,7 @@ func (a *App) RunUpgrade() {
 			return
 		}
 
-		runtime.EventsEmit(a.ctx, "terminal:output", "\nUpgrade completed successfully.\n")
+		runtime.EventsEmit(a.ctx, "command:output", "\nUpgrade completed successfully.\n")
 		runtime.EventsEmit(a.ctx, "upgrade:complete", map[string]interface{}{
 			"success":  true,
 			"dnsError": dnsError,

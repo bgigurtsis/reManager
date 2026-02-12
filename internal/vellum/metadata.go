@@ -370,6 +370,57 @@ func (m *MetadataStore) GetAllPackagesForDevice(deviceType, firmware, arch strin
 	return packages
 }
 
+func (m *MetadataStore) GetPackageForTargetOS(name, targetOS, deviceType, arch string) *Package {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	versions, ok := m.packages.Packages[name]
+	if !ok {
+		return nil
+	}
+
+	var bestVersion string
+	var bestInfo PackageVersion
+
+	for version, info := range versions {
+		if !isVersionCompatible(info, deviceType, targetOS, arch) {
+			continue
+		}
+		if bestVersion == "" || compareVersions(version, bestVersion) > 0 {
+			bestVersion = version
+			bestInfo = info
+		}
+	}
+
+	if bestVersion == "" {
+		return nil
+	}
+
+	pkg := &Package{
+		Name:           name,
+		Version:        bestVersion,
+		Description:    bestInfo.Pkgdesc,
+		UpstreamAuthor: bestInfo.UpstreamAuthor,
+		Categories:     bestInfo.Categories,
+		License:        bestInfo.License,
+		URL:            bestInfo.URL,
+		OSMin:          bestInfo.OSMin,
+		OSMax:          bestInfo.OSMax,
+		OSConstraints:  bestInfo.OSConstraints,
+		Devices:        bestInfo.Devices,
+		Depends:        bestInfo.Depends,
+		Conflicts:      bestInfo.Conflicts,
+		Arch:           bestInfo.Arch,
+	}
+
+	if rmInfo, ok := m.remanager.Packages[name]; ok {
+		pkg.MaintenanceCommands = rmInfo.MaintenanceCommands
+		pkg.Hooks = rmInfo.Hooks
+	}
+
+	return pkg
+}
+
 func isVersionCompatible(info PackageVersion, deviceType, firmware, arch string) bool {
 	if deviceType != "" && len(info.Devices) > 0 {
 		found := false

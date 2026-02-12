@@ -11,6 +11,7 @@ interface CheckOSDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   isConnected: boolean
+  onSelectPackage: (name: string, targetOS: string, isCompatible: boolean) => void
 }
 
 interface CompatibilityResult {
@@ -24,6 +25,7 @@ export function CheckOSDialog({
   open,
   onOpenChange,
   isConnected,
+  onSelectPackage,
 }: CheckOSDialogProps) {
   const [targetVersion, setTargetVersion] = useState('')
   const [loading, setLoading] = useState(false)
@@ -62,7 +64,7 @@ export function CheckOSDialog({
   const incompatiblePackages = result?.incompatible ?? []
 
   return (
-    <Dialog open={open} onOpenChange={handleClose}>
+    <Dialog open={open} onOpenChange={handleClose} lowPriority>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle>Check OS Compatibility</DialogTitle>
@@ -119,7 +121,12 @@ export function CheckOSDialog({
                         {compatiblePackages.map(pkg => (
                           <div key={pkg} className="py-1 text-sm flex items-center gap-2">
                             <Check className="h-4 w-4 text-green-500 flex-shrink-0" />
-                            <span>{pkg}</span>
+                            <button
+                              onClick={() => onSelectPackage(pkg, targetVersion, true)}
+                              className="text-primary hover:underline text-left"
+                            >
+                              {pkg}
+                            </button>
                           </div>
                         ))}
                       </div>
@@ -137,7 +144,12 @@ export function CheckOSDialog({
                         {incompatiblePackages.map(pkg => (
                           <div key={pkg} className="py-1 text-sm flex items-center gap-2">
                             <X className="h-4 w-4 text-destructive flex-shrink-0" />
-                            <span>{pkg}</span>
+                            <button
+                              onClick={() => onSelectPackage(pkg, targetVersion, false)}
+                              className="text-primary hover:underline text-left"
+                            >
+                              {pkg}
+                            </button>
                           </div>
                         ))}
                       </div>
