@@ -26,12 +26,13 @@ import { FileBrowser } from '@/components/FileBrowser'
 import { ConfigEditor } from '@/components/ConfigEditor'
 import { BackupRestoreDialog } from '@/components/BackupRestore'
 import { CheckOSDialog } from '@/components/CheckOSDialog'
+import { SupportBundlePage } from '@/components/SupportBundlePage'
 import { DnsErrorModal } from '@/components/DnsErrorModal'
 import { FilesystemRestoreErrorDialog } from '@/components/FilesystemRestoreErrorDialog'
 import { TimezoneCombobox } from '@/components/TimezoneCombobox'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { Badge } from '@/components/ui/badge'
-import { Loader2, Unplug, Check, AlertTriangle, AlertCircle, Trash2, Plus, X, Search, Settings, WifiOff, Eye, EyeOff, RefreshCw, Info } from 'lucide-react'
+import { Loader2, Unplug, Check, AlertTriangle, AlertCircle, Trash2, Plus, X, Search, Settings, WifiOff, Eye, EyeOff, RefreshCw, Info, LifeBuoy } from 'lucide-react'
 
 interface PackageInfo {
   name: string
@@ -239,6 +240,16 @@ declare global {
           IsSleepScreenSupported(): Promise<boolean>
           SetSleepScreen(imagePath: string): Promise<void>
           RestartXochitl(): Promise<void>
+          DeleteAllLogs(): Promise<void>
+          GetSupportBundlePreview(): Promise<{ included: string[]; excluded: string[] }>
+          GenerateSupportBundle(deviceID: string): void
+          UploadSupportBundle(deviceID: string): void
+          AppendSupportBundle(remoteID: string, deviceID: string): void
+          DeleteSupportBundle(remoteID: string): Promise<void>
+          GetBundleHistory(): Promise<{ id: string; remoteId: string; url: string; deviceName: string; deviceId: string; uploadedAt: number; lastAppended?: number; expiresAt?: number }[]>
+          CopyToClipboard(text: string): void
+          GetSupportBundleSessionID(): Promise<string>
+          ResetSupportBundleSession(): Promise<void>
         }
       }
     }
@@ -313,6 +324,7 @@ export default function App() {
   const manuallyStoppedRef = useRef(false)
 
   const [showSettingsDialog, setShowSettingsDialog] = useState(false)
+  const [showSupportBundles, setShowSupportBundles] = useState(false)
   const [showFileBrowser, setShowFileBrowser] = useState(false)
   const [showConfigEditor, setShowConfigEditor] = useState(false)
   const [backupDialogMode, setBackupDialogMode] = useState<'backup' | 'restore' | null>(null)
@@ -362,6 +374,7 @@ export default function App() {
   const [deviceToDelete, setDeviceToDelete] = useState<string | null>(null)
   const [editingDevice, setEditingDevice] = useState<SavedDevice | null>(null)
   const [connectingDeviceId, setConnectingDeviceId] = useState<string | null>(null)
+  const [connectedDeviceId, setConnectedDeviceId] = useState('')
   const [queueError, setQueueError] = useState<string | null>(null)
   const [lastInstallSuccess, setLastInstallSuccess] = useState<boolean | null>(null)
   const [lastOperationType, setLastOperationType] = useState<'install' | 'uninstall' | null>(null)
@@ -666,6 +679,7 @@ export default function App() {
       if (thisAttempt !== connectAttemptRef.current) return
 
       if (result.success) {
+        setConnectedDeviceId(id)
         const info = await window.go.main.App.GetDeviceInfo()
         const deviceType = result.device || 'unknown'
         setDevice(deviceType)
@@ -1407,6 +1421,7 @@ export default function App() {
     await window.go.main.App.Disconnect()
     setStep('connect')
     setDevice('')
+    setConnectedDeviceId('')
     setDeviceInfo({})
     setInstalledPackages(new Map())
     setInstallQueue(new Set())
@@ -1902,6 +1917,14 @@ export default function App() {
               </TooltipTrigger>
               <TooltipContent>Settings</TooltipContent>
             </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="sm" onClick={() => setShowSupportBundles(true)}>
+                  <LifeBuoy className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Support</TooltipContent>
+            </Tooltip>
             {device && (
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -2289,68 +2312,73 @@ export default function App() {
               ) : (
               <div className={`space-y-6 ${(installQueue.size > 0 || uninstallQueue.size > 0) ? 'pb-48' : ''}`}>
                   {/* Filters */}
-                  <div className="flex gap-2">
-                    <div className="relative flex-1">
-                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                      <Input
-                        placeholder="Search mods..."
-                        value={search}
-                        onChange={(e) => setSearch(e.target.value)}
-                        className={`pl-9 ${search ? 'pr-8' : ''}`}
-                      />
-                      {search && (
-                        <button
-                          onClick={() => setSearch('')}
-                          className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                        >
-                          <X className="h-4 w-4" />
-                        </button>
-                      )}
+                  <div className="flex flex-wrap gap-2">
+                    <div className="flex gap-2 w-full md:contents">
+                      <div className="relative flex-1">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                        <Input
+                          placeholder="Search mods..."
+                          value={search}
+                          onChange={(e) => setSearch(e.target.value)}
+                          className={`pl-9 ${search ? 'pr-8' : ''}`}
+                        />
+                        {search && (
+                          <button
+                            onClick={() => setSearch('')}
+                            className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                          >
+                            <X className="h-4 w-4" />
+                          </button>
+                        )}
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        className="md:order-last"
+                        onClick={handleRefreshPackages}
+                        disabled={refreshingPackages}
+                        title="Refresh package list"
+                      >
+                        {refreshingPackages ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <RefreshCw className="h-4 w-4" />
+                        )}
+                      </Button>
                     </div>
-                    <Select value={categoryFilter} onValueChange={setCategoryFilter}>
-                      <SelectTrigger className="w-[160px]">
-                        <SelectValue placeholder="Category" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">All Categories</SelectItem>
-                        {categories.map((cat) => (
-                          <SelectItem key={cat} value={cat}>{cat}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <Select value={developerFilter} onValueChange={setDeveloperFilter}>
-                      <SelectTrigger className="w-[160px]">
-                        <SelectValue placeholder="Developer" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">All Developers</SelectItem>
-                        {developers.map((dev) => (
-                          <SelectItem key={dev} value={dev}>{dev}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <Select value={viewMode} onValueChange={(v) => setViewMode(v as 'full' | 'compact')}>
-                      <SelectTrigger className="w-[120px]">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="full">Full</SelectItem>
-                        <SelectItem value="compact">Compact</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <Button
-                      variant="outline"
-                      size="icon"
-                      onClick={handleRefreshPackages}
-                      disabled={refreshingPackages}
-                      title="Refresh package list"
-                    >
-                      {refreshingPackages ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      ) : (
-                        <RefreshCw className="h-4 w-4" />
-                      )}
-                    </Button>
+                    <div className="flex gap-2 w-full md:contents">
+                      <Select value={categoryFilter} onValueChange={setCategoryFilter}>
+                        <SelectTrigger className="flex-1 md:flex-none md:w-[160px]">
+                          <SelectValue placeholder="Category" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All Categories</SelectItem>
+                          {categories.map((cat) => (
+                            <SelectItem key={cat} value={cat}>{cat}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Select value={developerFilter} onValueChange={setDeveloperFilter}>
+                        <SelectTrigger className="flex-1 md:flex-none md:w-[160px]">
+                          <SelectValue placeholder="Developer" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All Developers</SelectItem>
+                          {developers.map((dev) => (
+                            <SelectItem key={dev} value={dev}>{dev}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Select value={viewMode} onValueChange={(v) => setViewMode(v as 'full' | 'compact')}>
+                        <SelectTrigger className="flex-1 md:flex-none md:w-[120px]">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="full">Full</SelectItem>
+                          <SelectItem value="compact">Compact</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
                   </div>
 
                   {/* Installed Section */}
@@ -3469,6 +3497,14 @@ export default function App() {
         uninstallOutput={vellumUninstallOutput}
         uninstallError={vellumUninstallError}
         appVersion={appVersion}
+      />
+
+      <SupportBundlePage
+        open={showSupportBundles}
+        onOpenChange={setShowSupportBundles}
+        isConnected={!!device}
+        savedDevices={savedDevices}
+        connectedDeviceId={connectedDeviceId}
       />
 
       <VellumInstallSuccessDialog

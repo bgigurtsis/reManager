@@ -31,7 +31,7 @@ type DeviceStore struct {
 }
 
 func NewDeviceStore() (*DeviceStore, error) {
-	configDir, err := getConfigDir()
+	configDir, err := GetConfigDir()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get config directory: %w", err)
 	}
@@ -51,7 +51,7 @@ func NewDeviceStore() (*DeviceStore, error) {
 	}, nil
 }
 
-func getConfigDir() (string, error) {
+func GetConfigDir() (string, error) {
 	switch runtime.GOOS {
 	case "darwin":
 		home, err := os.UserHomeDir()

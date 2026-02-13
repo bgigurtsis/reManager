@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react'
+import { toast } from 'sonner'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Loader2, AlertTriangle, AlertCircle } from 'lucide-react'
+import { Loader2, AlertTriangle, AlertCircle, CheckCircle2, Trash2 } from 'lucide-react'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { TerminalWithCopy } from '@/components/TerminalWithCopy'
 
@@ -62,6 +63,8 @@ export function SettingsDialog({
   const [localCheckForUpdates, setLocalCheckForUpdates] = useState(checkForUpdates)
   const [showUninstallConfirm, setShowUninstallConfirm] = useState(false)
   const [removePackages, setRemovePackages] = useState(true)
+  const [confirmDeleteLogs, setConfirmDeleteLogs] = useState(false)
+  const [deletingLogs, setDeletingLogs] = useState(false)
 
   const hasChanges =
     localProxyMode !== proxyMode ||
@@ -96,6 +99,7 @@ export function SettingsDialog({
     setLocalEditorTheme(editorTheme)
     setLocalCheckForUpdates(checkForUpdates)
     setShowUninstallConfirm(false)
+    setConfirmDeleteLogs(false)
     onOpenChange(false)
   }
 
@@ -104,9 +108,23 @@ export function SettingsDialog({
     onOpenChange(false)
   }
 
+  const handleDeleteLogs = async () => {
+    setDeletingLogs(true)
+    try {
+      await window.go.main.App.DeleteAllLogs()
+      toast('All command logs deleted', { icon: <CheckCircle2 className="h-4 w-4" /> })
+      setConfirmDeleteLogs(false)
+    } catch (err) {
+      toast('Failed to delete logs: ' + (err instanceof Error ? err.message : String(err)))
+    } finally {
+      setDeletingLogs(false)
+    }
+  }
+
   const handleOpenChange = (newOpen: boolean) => {
     if (!newOpen) {
       setShowUninstallConfirm(false)
+      setConfirmDeleteLogs(false)
       setLocalTabVisibility({ ...defaultTabVisibility, ...tabVisibility })
       setLocalProxyMode(proxyMode)
       setLocalSuppressSystemFileWarnings(suppressSystemFileWarnings)
@@ -261,6 +279,52 @@ export function SettingsDialog({
             </CardContent>
           </Card>
 
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base">Data</CardTitle>
+              <CardDescription className="text-xs">
+                Command logs are automatically cleaned up after 30 days
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {!confirmDeleteLogs ? (
+                <Button
+                  variant="outline"
+                  onClick={() => setConfirmDeleteLogs(true)}
+                  className="w-full"
+                >
+                  <Trash2 className="h-4 w-4 mr-1.5" />
+                  Delete Command Logs
+                </Button>
+              ) : (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2 text-sm text-destructive">
+                    <AlertTriangle className="h-4 w-4" />
+                    <span>This will permanently delete all command logs</span>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      onClick={() => setConfirmDeleteLogs(false)}
+                      className="flex-1"
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      variant="destructive"
+                      onClick={handleDeleteLogs}
+                      disabled={deletingLogs}
+                      className="flex-1"
+                    >
+                      {deletingLogs ? <Loader2 className="h-4 w-4 animate-spin mr-1.5" /> : null}
+                      Delete
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
           {isConnected && vellumInstalled && (
             <Card className="border-destructive/50">
               <CardHeader className="pb-3">
@@ -371,6 +435,7 @@ export function SettingsDialog({
           </button>
         </div>
       </DialogContent>
+
     </Dialog>
   )
 }

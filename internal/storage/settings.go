@@ -26,7 +26,7 @@ type SettingsStore struct {
 }
 
 func NewSettingsStore() (*SettingsStore, error) {
-	configDir, err := getConfigDir()
+	configDir, err := GetConfigDir()
 	if err != nil {
 		return nil, err
 	}
@@ -109,6 +109,7 @@ func (s *SettingsStore) defaultSettings() *Settings {
 			"mods":        true,
 			"maintenance": true,
 			"utilities":   true,
+			"support":     true,
 		},
 		ProxyMode:                  true,
 		SuppressSystemFileWarnings: false,
