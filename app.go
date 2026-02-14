@@ -4986,35 +4986,51 @@ func (a *App) findPenInputDevice() (string, error) {
 	return device, nil
 }
 
-func (a *App) pokePenDevice(devicePath string) error {
-	debug.Printf("[DEBUG] pokePenDevice: poking device %s\n", devicePath)
+func (a *App) pokePenDevice(devicePath string, enter bool) error {
+	debug.Printf("[DEBUG] pokePenDevice: device=%s enter=%v\n", devicePath, enter)
 
-	// Detect architecture to use correct input_event size
-	// 32-bit ARM (RM1/RM2): 16 bytes, 64-bit ARM (Paper Pro): 24 bytes
-	// Use uname -m to detect: armv7l = 32-bit, aarch64 = 64-bit
+	var val, dist string
+	if enter {
+		val = `\001`
+		dist = `\062`
+	} else {
+		val = `\000`
+		dist = `\000`
+	}
+
 	cmd := fmt.Sprintf(`arch=$(uname -m)
 if [ "$arch" = "aarch64" ]; then
-  # 64-bit: 24-byte events (8+8+2+2+4)
-  printf '\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\001\000\112\001\001\000\000\000' > %s
-  printf '\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000' > %s
-  printf '\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\001\000\112\001\000\000\000\000' > %s
+  printf '\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\001\000\100\001%s\000\000\000' > %s
+  printf '\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\003\000\031\000%s\000\000\000' > %s
   printf '\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000' > %s
 else
-  # 32-bit: 16-byte events (4+4+2+2+4)
-  printf '\000\000\000\000\000\000\000\000\001\000\112\001\001\000\000\000' > %s
+  printf '\000\000\000\000\000\000\000\000\003\000\000\000\062\000\000\000' > %s
+  printf '\000\000\000\000\000\000\000\000\003\000\001\000\062\000\000\000' > %s
   printf '\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000' > %s
-  printf '\000\000\000\000\000\000\000\000\001\000\112\001\000\000\000\000' > %s
+  printf '\000\000\000\000\000\000\000\000\003\000\000\000\144\000\000\000' > %s
+  printf '\000\000\000\000\000\000\000\000\003\000\001\000\144\000\000\000' > %s
+  printf '\000\000\000\000\000\000\000\000\001\000\100\001%s\000\000\000' > %s
+  printf '\000\000\000\000\000\000\000\000\003\000\031\000%s\000\000\000' > %s
   printf '\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000' > %s
 fi`,
-		devicePath, devicePath, devicePath, devicePath,
-		devicePath, devicePath, devicePath, devicePath)
+		val, devicePath,
+		dist, devicePath,
+		devicePath,
+		devicePath,
+		devicePath,
+		devicePath,
+		devicePath,
+		devicePath,
+		val, devicePath,
+		dist, devicePath,
+		devicePath)
 
 	_, err := a.runCommand(cmd)
 	if err != nil {
 		debug.Printf("[DEBUG] pokePenDevice: command failed: %v\n", err)
 		return err
 	}
-	debug.Println("[DEBUG] pokePenDevice: successfully wrote all events")
+	debug.Println("[DEBUG] pokePenDevice: successfully wrote events")
 	return nil
 }
 
@@ -5045,20 +5061,23 @@ func (a *App) StartPreventSleep() error {
 		ticker := time.NewTicker(60 * time.Second)
 		defer ticker.Stop()
 
-		debug.Println("[DEBUG] StartPreventSleep goroutine: performing initial poke")
-		if err := a.pokePenDevice(penDevice); err != nil {
-			debug.Printf("[DEBUG] StartPreventSleep goroutine: initial poke failed: %v\n", err)
+		debug.Println("[DEBUG] StartPreventSleep goroutine: sending pen-enter")
+		if err := a.pokePenDevice(penDevice, true); err != nil {
+			debug.Printf("[DEBUG] StartPreventSleep goroutine: pen-enter failed: %v\n", err)
 		}
 
 		for {
 			select {
 			case <-ticker.C:
-				debug.Println("[DEBUG] StartPreventSleep goroutine: ticker fired, poking device")
-				if err := a.pokePenDevice(penDevice); err != nil {
-					debug.Printf("[DEBUG] StartPreventSleep goroutine: poke failed: %v\n", err)
+				debug.Println("[DEBUG] StartPreventSleep goroutine: re-asserting pen hover")
+				a.pokePenDevice(penDevice, false)
+				time.Sleep(50 * time.Millisecond)
+				if err := a.pokePenDevice(penDevice, true); err != nil {
+					debug.Printf("[DEBUG] StartPreventSleep goroutine: pen-enter failed: %v\n", err)
 				}
 			case <-stopCh:
-				debug.Println("[DEBUG] StartPreventSleep goroutine: stop channel closed, exiting")
+				debug.Println("[DEBUG] StartPreventSleep goroutine: sending pen-leave")
+				a.pokePenDevice(penDevice, false)
 				return
 			}
 		}
@@ -5072,6 +5091,7 @@ func (a *App) StartPreventSleep() error {
 func (a *App) StopPreventSleep() error {
 	debug.Println("[DEBUG] StopPreventSleep: called")
 	a.mu.Lock()
+	penDevice := a.penInputDevice
 	if a.preventSleepStop != nil {
 		debug.Println("[DEBUG] StopPreventSleep: closing stop channel")
 		close(a.preventSleepStop)
@@ -5081,6 +5101,9 @@ func (a *App) StopPreventSleep() error {
 	}
 	a.penInputDevice = ""
 	a.mu.Unlock()
+	if penDevice != "" {
+		a.pokePenDevice(penDevice, false)
+	}
 
 	runtime.EventsEmit(a.ctx, "prevent-sleep-changed", false)
 	return nil
