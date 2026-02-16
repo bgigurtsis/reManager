@@ -534,6 +534,15 @@ export default function App() {
   )
 
   useEffect(() => {
+    if (selectedPackage) {
+      const updated = packages.find(p => p.name === selectedPackage.name)
+      if (updated && updated !== selectedPackage) {
+        setSelectedPackage(updated)
+      }
+    }
+  }, [packages])
+
+  useEffect(() => {
     commandContextRef.current = commandContext
   }, [commandContext])
 
@@ -1122,6 +1131,15 @@ export default function App() {
         setOsMismatchDetected(false)
         setCompatibilityStatus(null)
         setRescanning(true)
+        try {
+          const info = await window.go.main.App.GetDeviceInfo()
+          setDeviceInfo(info)
+          const arch = await window.go.main.App.GetDeviceArchitecture(device)
+          const filteredPkgs = await window.go.main.App.GetPackages(device, info.firmware || '', arch)
+          setPackages(filteredPkgs || [])
+        } catch (err) {
+          debugLog('Failed to refresh device info after upgrade:', err)
+        }
         await rescanAllPackages()
         setRescanning(false)
       }
@@ -1141,6 +1159,15 @@ export default function App() {
       debugLog('Received package-upgrade:complete:', result)
       if (result.success) {
         setRescanning(true)
+        try {
+          const info = await window.go.main.App.GetDeviceInfo()
+          setDeviceInfo(info)
+          const arch = await window.go.main.App.GetDeviceArchitecture(device)
+          const filteredPkgs = await window.go.main.App.GetPackages(device, info.firmware || '', arch)
+          setPackages(filteredPkgs || [])
+        } catch (err) {
+          debugLog('Failed to refresh device info after package upgrade:', err)
+        }
         await rescanAllPackages()
         setRescanning(false)
       }
@@ -1699,9 +1726,11 @@ export default function App() {
     setRefreshingPackages(true)
     try {
       await window.go.main.App.RefreshMetadata()
-      if (device && deviceInfo.firmware) {
+      if (device) {
+        const info = await window.go.main.App.GetDeviceInfo()
+        setDeviceInfo(info)
         const arch = await window.go.main.App.GetDeviceArchitecture(device)
-        const filteredPkgs = await window.go.main.App.GetPackages(device, deviceInfo.firmware, arch)
+        const filteredPkgs = await window.go.main.App.GetPackages(device, info.firmware || '', arch)
         setPackages(filteredPkgs || [])
       }
       await rescanAllPackages()

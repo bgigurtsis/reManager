@@ -119,14 +119,14 @@ export function PackageDetailPanel({
         <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
           <dt className="text-muted-foreground">Version</dt>
           <dd className={`font-medium ${showIncompatible ? 'text-destructive' : ''}`}>
-            {installedVersion && installedVersion !== pkg.version ? (
+            {viewOnly && installedVersion && installedVersion !== pkg.version ? (
               <span className="flex items-center gap-2">
                 <span className="text-muted-foreground">{installedVersion}</span>
                 <ArrowRight className="h-3 w-3" />
                 <span className={showIncompatible ? 'text-destructive' : 'text-green-600'}>{pkg.version}</span>
               </span>
             ) : (
-              pkg.version
+              isInstalled && installedVersion ? installedVersion : pkg.version
             )}
           </dd>
 
@@ -245,7 +245,7 @@ export function PackageDetailPanel({
 
           {pkg.url && (
             <>
-              <dt className="text-muted-foreground col-span-2 mt-2 border-t pt-3">Source</dt>
+              <dt className="text-muted-foreground col-span-2 mt-2 border-t pt-3">Project</dt>
               <dd className="col-span-2">
                 <button
                   onClick={() => window.runtime.BrowserOpenURL(pkg.url)}
