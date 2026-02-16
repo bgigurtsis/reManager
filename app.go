@@ -137,8 +137,10 @@ type App struct {
 	supportBundleID   string
 
 	keepaliveStop     chan struct{}
-	connectedDeviceID string
-	reconnecting      bool
+	connectedDeviceID   string
+	connectedDeviceType string
+	writeableRootBusy   bool
+	reconnecting        bool
 	reconnectMu       sync.Mutex
 	fastDialMode      bool
 	installCancelCh        chan struct{}
@@ -768,6 +770,12 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 				})
 			}
 
+			reenableStatus, reenableErr := a.vellumClient.ReenableStatus()
+			if reenableErr == nil && reenableStatus != "" {
+				debug.Printf("[DEBUG] Reenable status: %s\n", reenableStatus)
+				runtime.EventsEmit(a.ctx, "reenable:status", reenableStatus)
+			}
+
 			status := a.CheckHashtabVersion()
 			debug.Printf("[DEBUG] Hashtab check: installed=%v, hashtabVersion=%s, firmwareVersion=%s, needsRebuild=%v\n",
 				status.Installed, status.HashtabVersion, status.FirmwareVersion, status.NeedsRebuild)
@@ -806,6 +814,10 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 			}
 		}
 	}()
+
+	a.mu.Lock()
+	a.connectedDeviceType = deviceType
+	a.mu.Unlock()
 
 	return ConnectionResult{
 		Success: true,
@@ -853,6 +865,8 @@ func (a *App) Disconnect() {
 	defer a.mu.Unlock()
 
 	a.connectedDeviceID = ""
+	a.connectedDeviceType = ""
+	a.writeableRootBusy = false
 
 	if a.client != nil {
 		a.client.Close()
@@ -865,6 +879,38 @@ func (a *App) IsConnected() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.client != nil
+}
+
+func (a *App) acquireWriteableRoot(deviceType string) error {
+	dev := component.DeviceType(deviceType)
+	if dev != component.DeviceRMPP && dev != component.DeviceRMPPM {
+		return nil
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.writeableRootBusy {
+		return fmt.Errorf("another operation is modifying the filesystem")
+	}
+	a.writeableRootBusy = true
+	runtime.EventsEmit(a.ctx, "writeable-root:busy", true)
+	return nil
+}
+
+func (a *App) releaseWriteableRoot(deviceType string) {
+	dev := component.DeviceType(deviceType)
+	if dev != component.DeviceRMPP && dev != component.DeviceRMPPM {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.writeableRootBusy = false
+	runtime.EventsEmit(a.ctx, "writeable-root:busy", false)
+}
+
+func (a *App) IsWriteableRootBusy() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.writeableRootBusy
 }
 
 const (
@@ -1596,6 +1642,13 @@ func (a *App) SetDeviceTimezone(timezone string, deviceType string) {
 		}
 		a.mu.Unlock()
 
+		if err := a.acquireWriteableRoot(deviceType); err != nil {
+			runtime.EventsEmit(a.ctx, "timezone:error", err.Error())
+			runtime.EventsEmit(a.ctx, "command:done", false)
+			return
+		}
+		defer a.releaseWriteableRoot(deviceType)
+
 		cmdResults := []component.CommandResult{
 			{
 				Script:      fmt.Sprintf("systemctl restart systemd-timedated && timedatectl set-timezone %s", timezone),
@@ -1825,6 +1878,12 @@ func (a *App) RunReenable() {
 		return
 	}
 
+	if err := a.acquireWriteableRoot(a.connectedDeviceType); err != nil {
+		runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("Blocked: %v\n", err))
+		return
+	}
+	defer a.releaseWriteableRoot(a.connectedDeviceType)
+
 	runtime.EventsEmit(a.ctx, "command:output", "Running vellum reenable...\n")
 
 	err := a.vellumClient.ReenableStreaming(func(line string) {
@@ -1836,6 +1895,23 @@ func (a *App) RunReenable() {
 	} else {
 		runtime.EventsEmit(a.ctx, "command:output", "\nReenable completed successfully.\n")
 	}
+}
+
+type ReenableStatusResult struct {
+	Status string `json:"status"`
+}
+
+func (a *App) GetReenableStatus() ReenableStatusResult {
+	if a.vellumClient == nil {
+		return ReenableStatusResult{}
+	}
+	status, err := a.vellumClient.ReenableStatus()
+	if err != nil {
+		debug.Printf("[DEBUG] GetReenableStatus error: %v\n", err)
+		return ReenableStatusResult{}
+	}
+	debug.Printf("[DEBUG] GetReenableStatus: %s\n", status)
+	return ReenableStatusResult{Status: status}
 }
 
 func (a *App) SimulatePackageUpgrade() (map[string]interface{}, error) {
@@ -2722,6 +2798,12 @@ func (a *App) RunSystemTask(taskID, deviceType string) {
 
 		if task.NeedsWriteableRoot {
 			cmdResults = commands.WrapWithWriteableRoot(cmdResults, component.DeviceType(deviceType))
+			if err := a.acquireWriteableRoot(deviceType); err != nil {
+				runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("Blocked: %v\n", err))
+				runtime.EventsEmit(a.ctx, "command:done", false)
+				return
+			}
+			defer a.releaseWriteableRoot(deviceType)
 		}
 
 		var operationErr error

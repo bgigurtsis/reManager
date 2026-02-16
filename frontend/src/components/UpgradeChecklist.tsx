@@ -14,10 +14,6 @@ interface UpgradeChecklistProps {
   onAddToUninstallQueue: (pkg: string) => void
   onRemoveFromUninstallQueue: (pkg: string) => void
   onRunUpgrade: () => void
-  autoUpdatesEnabled?: boolean
-  hashtabMismatch?: boolean
-  timezoneMismatch?: boolean
-  onGoToMaintenance: () => void
   onSelectPackage: (name: string, targetOS: string, isCompatible: boolean) => void
 }
 
@@ -32,10 +28,6 @@ export function UpgradeChecklist({
   onAddToUninstallQueue,
   onRemoveFromUninstallQueue,
   onRunUpgrade,
-  autoUpdatesEnabled = false,
-  hashtabMismatch = false,
-  timezoneMismatch = false,
-  onGoToMaintenance,
   onSelectPackage,
 }: UpgradeChecklistProps) {
   const canUpgrade = incompatiblePackages.length === 0
@@ -54,24 +46,6 @@ export function UpgradeChecklist({
       </CardHeader>
 
       <CardContent className="space-y-6">
-        <div className="bg-muted p-4 rounded-md flex items-center justify-between">
-          <ul className="text-sm space-y-1">
-            {autoUpdatesEnabled && (
-              <li>• Auto-updates are enabled</li>
-            )}
-            <li>• Run Vellum Reenable to restore system modifications</li>
-            {hashtabMismatch && (
-              <li>• Rebuild hashtable after OS upgrade</li>
-            )}
-            {timezoneMismatch && (
-              <li>• Set timezone after OS upgrade</li>
-            )}
-          </ul>
-          <Button variant="link" size="sm" className="h-auto p-0" onClick={onGoToMaintenance}>
-            Go to Maintenance →
-          </Button>
-        </div>
-
         {fetchFailed && (
           <div className="text-sm text-muted-foreground bg-muted p-3 rounded-md">
             Could not verify package compatibility (offline?). Showing all installed packages.

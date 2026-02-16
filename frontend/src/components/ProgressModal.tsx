@@ -14,6 +14,7 @@ interface ProgressModalProps {
   canStop?: boolean
   onStop?: () => void
   terminalTheme?: 'dark' | 'light'
+  showProgress?: boolean
 }
 
 export function ProgressModal({
@@ -26,6 +27,7 @@ export function ProgressModal({
   canStop,
   onStop,
   terminalTheme,
+  showProgress = true,
 }: ProgressModalProps) {
   return (
     <>
@@ -37,7 +39,7 @@ export function ProgressModal({
           {!isComplete && <Loader2 className="h-4 w-4 animate-spin" />}
           {progressText}
         </p>
-        <Progress value={percentage} />
+        {showProgress && <Progress value={percentage} />}
         {isComplete && !terminalOutput.trim() ? (
           <div className="h-[400px] rounded-lg flex flex-col items-center justify-center gap-3">
             <CheckCircle2 className="h-12 w-12 text-green-600 dark:text-green-400" />

@@ -8,6 +8,7 @@ interface ConsolidatedWarningBannerProps {
     timezoneMismatch?: { deviceTimezone: string; savedTimezone: string }
     osUpgrade?: { prevVersion: string; newVersion: string }
     autoUpdatesEnabled?: boolean
+    reenableNeeded?: boolean
   }
   onGoToMaintenance: () => void
   onDismiss: () => void
@@ -18,7 +19,7 @@ export function ConsolidatedWarningBanner({
   onGoToMaintenance,
   onDismiss,
 }: ConsolidatedWarningBannerProps) {
-  const hasWarnings = warnings.osUpgrade || warnings.hashtabMismatch || warnings.timezoneMismatch || warnings.autoUpdatesEnabled
+  const hasWarnings = warnings.osUpgrade || warnings.hashtabMismatch || warnings.timezoneMismatch || warnings.autoUpdatesEnabled || warnings.reenableNeeded
 
   if (!hasWarnings) return null
 
@@ -40,11 +41,14 @@ export function ConsolidatedWarningBanner({
           {warnings.autoUpdatesEnabled && (
             <li>Auto-updates are enabled and may interfere with mods</li>
           )}
+          {warnings.reenableNeeded && (
+            <li>Reenable is needed to restore packages that modify the system partition</li>
+          )}
         </ul>
       </AlertDescription>
-      <AlertAction>
-        <Button size="xs" onClick={onGoToMaintenance}>
-          Maintenance
+      <AlertAction className="top-1/2 -translate-y-1/2">
+        <Button variant="link" size="sm" className="h-auto p-0" onClick={onGoToMaintenance}>
+          Go to Maintenance →
         </Button>
         <Button variant="ghost" size="xs" onClick={onDismiss}>
           <X className="h-3 w-3" />

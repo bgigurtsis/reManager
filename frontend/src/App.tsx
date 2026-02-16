@@ -399,6 +399,7 @@ export default function App() {
   const [prevOsVersion, setPrevOsVersion] = useState('')
   const [newOsVersion, setNewOsVersion] = useState('')
   const [runningReenable, setRunningReenable] = useState(false)
+  const [reenableStatus, setReenableStatus] = useState('')
   const [pendingPackageUpgrade, setPendingPackageUpgrade] = useState<string[] | null>(null)
   const [simulatingUpgrade, setSimulatingUpgrade] = useState(false)
   const [showNoUpgradesDialog, setShowNoUpgradesDialog] = useState(false)
@@ -432,6 +433,7 @@ export default function App() {
 
   const [showFilesystemRestoreError, setShowFilesystemRestoreError] = useState(false)
   const [isRetryingFilesystemRestore, setIsRetryingFilesystemRestore] = useState(false)
+  const [writeableRootBusy, setWriteableRootBusy] = useState(false)
 
   const [search, setSearch] = useState('')
   const [categoryFilter, setCategoryFilter] = useState('all')
@@ -1106,6 +1108,11 @@ export default function App() {
       setCurrentOsVersion(data.newVersion)
     })
 
+    const unsubscribeReenableStatus = window.runtime.EventsOn('reenable:status', (...args: unknown[]) => {
+      debugLog('Received reenable:status:', args[0])
+      setReenableStatus(args[0] as string)
+    })
+
     const unsubscribeUpgradeBlocked = window.runtime.EventsOn('upgrade:blocked', (...args: unknown[]) => {
       const compat = args[0] as {
         compatible: string[]
@@ -1293,6 +1300,10 @@ export default function App() {
       setShowFilesystemRestoreError(true)
     })
 
+    const unsubscribeWriteableRootBusy = window.runtime.EventsOn('writeable-root:busy', (...args: unknown[]) => {
+      setWriteableRootBusy(args[0] as boolean)
+    })
+
     return () => {
       unsubscribeOutput()
       unsubscribeDone()
@@ -1320,6 +1331,7 @@ export default function App() {
       unsubscribeTimezoneComplete()
       unsubscribeTimezoneError()
       unsubscribeOsMismatch()
+      unsubscribeReenableStatus()
       unsubscribeUpgradeBlocked()
       unsubscribeUpgradeError()
       unsubscribeUpgradeComplete()
@@ -1331,6 +1343,7 @@ export default function App() {
       unsubscribeConnectionRestored()
       unsubscribeConnectionFailed()
       unsubscribeFilesystemRestoreError()
+      unsubscribeWriteableRootBusy()
     }
   }, [])
 
@@ -1474,6 +1487,7 @@ export default function App() {
     setReconnectAttempt(0)
     setShowFileBrowser(false)
     setShowConfigEditor(false)
+    setWriteableRootBusy(false)
 
     const devices = await window.go.main.App.GetSavedDevices()
     setSavedDevices(devices || [])
@@ -1759,6 +1773,7 @@ export default function App() {
     await window.go.main.App.RunReenable()
 
     setRunningReenable(false)
+    setReenableStatus('ok')
     setRescanning(true)
     await rescanAllPackages()
     setRescanning(false)
@@ -2247,7 +2262,7 @@ export default function App() {
         )}
 
         {/* Warning Banner */}
-        {step !== 'connect' && !osMismatchDetected && (
+        {step !== 'connect' && (
           <div className="mb-4">
             <ConsolidatedWarningBanner
               warnings={{
@@ -2255,6 +2270,7 @@ export default function App() {
                 hashtabMismatch: hashtabMismatch ? { hashtabVersion: hashtabMismatch.hashtabVersion, firmwareVersion: hashtabMismatch.firmwareVersion } : undefined,
                 timezoneMismatch: timezoneMismatch ? { deviceTimezone: timezoneMismatch.deviceTimezone, savedTimezone: timezoneMismatch.savedTimezone } : undefined,
                 autoUpdatesEnabled: showAutoUpdateBanner,
+                reenableNeeded: reenableStatus === 'needed',
               }}
               onGoToMaintenance={() => setActiveTab('maintenance')}
               onDismiss={() => {
@@ -2331,10 +2347,6 @@ export default function App() {
                     onAddToUninstallQueue={addToUninstallQueue}
                     onRemoveFromUninstallQueue={removeFromUninstallQueue}
                     onRunUpgrade={handleChecklistUpgrade}
-                    autoUpdatesEnabled={updateServiceStatus.enabled}
-                    hashtabMismatch={!!hashtabMismatch}
-                    timezoneMismatch={!!timezoneMismatch}
-                    onGoToMaintenance={() => setActiveTab('maintenance')}
                     onSelectPackage={handleSelectPackageForOS}
                   />
                 </div>
@@ -2615,7 +2627,7 @@ export default function App() {
                             <Button
                               key={task.id}
                               onClick={() => handleSystemTask(task.id)}
-                              disabled={commandRunning || isEnableDisabled || isDisableDisabled || connectionStatus !== 'connected'}
+                              disabled={commandRunning || isEnableDisabled || isDisableDisabled || connectionStatus !== 'connected' || (task.needsWriteableRoot && writeableRootBusy)}
                               variant={shouldHighlight ? 'default' : 'outline'}
                             >
                               {isRunning ? (
@@ -2643,7 +2655,7 @@ export default function App() {
                         </div>
                         <Button
                           onClick={handleSetTimezone}
-                          disabled={settingTimezone || connectionStatus !== 'connected' || !selectedTimezone || selectedTimezone === deviceTimezone}
+                          disabled={settingTimezone || connectionStatus !== 'connected' || !selectedTimezone || selectedTimezone === deviceTimezone || writeableRootBusy}
                           variant={timezoneMismatch?.needsUpdate ? 'default' : 'outline'}
                         >
                           {settingTimezone ? (
@@ -2676,8 +2688,8 @@ export default function App() {
                             <TooltipTrigger asChild>
                               <Button
                                 onClick={handleRunReenable}
-                                disabled={commandRunning || runningReenable || connectionStatus !== 'connected'}
-                                variant="outline"
+                                disabled={commandRunning || runningReenable || connectionStatus !== 'connected' || reenableStatus === 'unneeded' || writeableRootBusy}
+                                variant={reenableStatus === 'needed' ? 'default' : 'outline'}
                                 size="sm"
                                 className="flex-1"
                               >
@@ -2741,7 +2753,7 @@ export default function App() {
                                         <TooltipTrigger asChild>
                                           <Button
                                             onClick={() => handleComponentMaintenance(pkg.name, cmd.id)}
-                                            disabled={(commandRunning && !isRunning) || connectionStatus !== 'connected'}
+                                            disabled={(commandRunning && !isRunning) || connectionStatus !== 'connected' || writeableRootBusy}
                                             variant={shouldHighlight ? 'default' : 'outline'}
                                             size="sm"
                                             className="flex-1"
@@ -3401,6 +3413,7 @@ export default function App() {
               canStop={(installing || uninstalling) || currentRunningCommand !== null}
               onStop={(installing || uninstalling) ? handleCancelInstallation : handleStopCommand}
               terminalTheme={resolvedTerminalTheme}
+              showProgress={progressModalType === 'install'}
             />
           )}
         </DialogContent>

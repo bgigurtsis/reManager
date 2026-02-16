@@ -172,6 +172,23 @@ func (c *Client) ListWithOsCheck() (*ListResult, error) {
 	return result, nil
 }
 
+func (c *Client) ReenableStatus() (string, error) {
+	cmd := fmt.Sprintf("%s reenable status", VellumBin)
+	output, err := c.executor.ExecuteWithOutput(cmd)
+
+	for _, line := range strings.Split(output, "\n") {
+		switch strings.TrimSpace(line) {
+		case "needed", "ok", "unneeded":
+			return strings.TrimSpace(line), nil
+		}
+	}
+
+	if err != nil {
+		return "", err
+	}
+	return "", nil
+}
+
 func (c *Client) ReenableStreaming(onOutput func(line string)) error {
 	cmd := fmt.Sprintf("%s reenable", VellumBin)
 	return c.executor.ExecuteStreaming(cmd, onOutput)
