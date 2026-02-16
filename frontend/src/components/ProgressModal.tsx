@@ -36,7 +36,9 @@ export function ProgressModal({
       </DialogHeader>
       <div className="space-y-4">
         <p className="text-sm font-medium text-center text-foreground flex items-center justify-center gap-2">
-          {!isComplete && <Loader2 className="h-4 w-4 animate-spin" />}
+          <span className="h-4 w-4 flex-shrink-0">
+            {!isComplete && <Loader2 className="h-4 w-4 animate-spin" />}
+          </span>
           {progressText}
         </p>
         {showProgress && <Progress value={percentage} />}
@@ -51,7 +53,7 @@ export function ProgressModal({
           </div>
         )}
       </div>
-      <DialogFooter>
+      <DialogFooter className="min-h-[40px]">
         {isComplete ? (
           <Button onClick={onClose}>Close</Button>
         ) : canStop ? (

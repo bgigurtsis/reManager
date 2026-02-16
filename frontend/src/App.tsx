@@ -289,6 +289,7 @@ export default function App() {
   const [progressStatus, setProgressStatus] = useState('')
   const [showRebuildDialog, setShowRebuildDialog] = useState(false)
   const [dialogRequest, setDialogRequest] = useState<DialogRequest | null>(null)
+  const dialogRespondedRef = useRef(false)
   const [runningHookTitle, setRunningHookTitle] = useState<string | null>(null)
   const connectAttemptRef = useRef(0)
 
@@ -834,7 +835,18 @@ export default function App() {
         return
       }
 
-      if (!success && !manuallyStoppedRef.current) {
+      if (!success && manuallyStoppedRef.current) {
+        manuallyStoppedRef.current = false
+        setShowProgressModal(false)
+        setMaintenanceOutput('')
+        setProgressModalType(null)
+        setCommandRunning(false)
+        setRunningSystemTask(null)
+        setSettingTimezone(false)
+        setCommandContext(null)
+        return
+      }
+      if (!success) {
         if (commandContextRef.current === 'maintenance') {
           setMaintenanceOutput((prev) => prev + '\n[Command failed]\n')
           setShowProgressModal(true)
@@ -842,7 +854,6 @@ export default function App() {
           setOutput((prev) => prev + '\n[Command failed]\n')
         }
       }
-      manuallyStoppedRef.current = false
       // Refresh status after maintenance commands
       if (commandContextRef.current === 'maintenance') {
         const [hashtabStatus, tzStatus] = await Promise.all([
@@ -958,6 +969,7 @@ export default function App() {
     const unsubscribeDialog = window.runtime.EventsOn('hook:dialog', (...args: unknown[]) => {
       const dialog = args[0] as DialogRequest
       debugLog('Received hook:dialog:', dialog)
+      dialogRespondedRef.current = false
       setDialogRequest(dialog)
       setShowRebuildDialog(true)
     })
@@ -2372,20 +2384,24 @@ export default function App() {
                           </button>
                         )}
                       </div>
-                      <Button
-                        variant="outline"
-                        size="icon"
-                        className="md:order-last"
-                        onClick={handleRefreshPackages}
-                        disabled={refreshingPackages}
-                        title="Refresh package list"
-                      >
-                        {refreshingPackages ? (
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                        ) : (
-                          <RefreshCw className="h-4 w-4" />
-                        )}
-                      </Button>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="outline"
+                            size="icon"
+                            className="md:order-last"
+                            onClick={handleRefreshPackages}
+                            disabled={refreshingPackages}
+                          >
+                            {refreshingPackages ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <RefreshCw className="h-4 w-4" />
+                            )}
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>Refresh package list</TooltipContent>
+                      </Tooltip>
                     </div>
                     <div className="flex gap-2 w-full md:contents">
                       <Select value={categoryFilter} onValueChange={setCategoryFilter}>
@@ -3170,7 +3186,15 @@ export default function App() {
       </Dialog>
 
       {/* Hook Dialog (e.g., Rebuild Qt Resources) */}
-      <Dialog open={showRebuildDialog} onOpenChange={setShowRebuildDialog} priority>
+      <Dialog open={showRebuildDialog} onOpenChange={(open) => {
+        setShowRebuildDialog(open)
+        if (!open && !dialogRespondedRef.current) {
+          dialogRespondedRef.current = true
+          manuallyStoppedRef.current = true
+          setDialogRequest(null)
+          window.go.main.App.RespondToDialog(false)
+        }
+      }} priority>
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
@@ -3197,6 +3221,7 @@ export default function App() {
             {dialogRequest?.infoOnly ? (
               <Button
                 onClick={() => {
+                  dialogRespondedRef.current = true
                   setShowRebuildDialog(false)
                   setDialogRequest(null)
                   window.go.main.App.RespondToDialog(true)
@@ -3209,6 +3234,8 @@ export default function App() {
                 <Button
                   variant="outline"
                   onClick={() => {
+                    dialogRespondedRef.current = true
+                    manuallyStoppedRef.current = true
                     setShowRebuildDialog(false)
                     setDialogRequest(null)
                     window.go.main.App.RespondToDialog(false)
@@ -3218,6 +3245,7 @@ export default function App() {
                 </Button>
                 <Button
                   onClick={() => {
+                    dialogRespondedRef.current = true
                     setShowRebuildDialog(false)
                     setDialogRequest(null)
                     window.go.main.App.RespondToDialog(true)

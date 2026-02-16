@@ -47,13 +47,13 @@ export function ConsolidatedWarningBanner({
         </ul>
       </AlertDescription>
       <AlertAction className="top-1/2 -translate-y-1/2">
-        <Button variant="link" size="sm" className="h-auto p-0" onClick={onGoToMaintenance}>
+        <Button variant="link" size="sm" className="h-auto p-0 pr-10" onClick={onGoToMaintenance}>
           Go to Maintenance →
         </Button>
-        <Button variant="ghost" size="xs" onClick={onDismiss}>
-          <X className="h-3 w-3" />
-        </Button>
       </AlertAction>
+      <Button variant="ghost" size="xs" className="absolute right-2 top-2" onClick={onDismiss}>
+        <X className="h-3 w-3" />
+      </Button>
     </Alert>
   )
 }
