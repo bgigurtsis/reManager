@@ -2983,17 +2983,74 @@ func (a *App) CheckForAppUpdate() UpdateCheckResult {
 		return result
 	}
 
+	if platform.IsRunningInFlatpak() {
+		return a.checkFlatpakUpdate(result)
+	}
+	return a.checkGitHubUpdate(result)
+}
+
+func (a *App) checkFlatpakUpdate(result UpdateCheckResult) UpdateCheckResult {
 	client := httputil.NewClient(10 * time.Second)
-	resp, err := client.Get("https://api.github.com/repos/rmitchellscott/remanager/releases/latest")
+	resp, err := client.Get("https://flathub.org/api/v2/appstream/io.scottlabs.reManager")
 	if err != nil {
-		debug.Printf("[DEBUG] CheckForAppUpdate: request failed: %v\n", err)
+		debug.Printf("[DEBUG] checkFlatpakUpdate: request failed: %v\n", err)
 		result.Error = "network_error"
 		return result
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		debug.Printf("[DEBUG] CheckForAppUpdate: HTTP %d\n", resp.StatusCode)
+		debug.Printf("[DEBUG] checkFlatpakUpdate: HTTP %d\n", resp.StatusCode)
+		result.Error = "api_error"
+		return result
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		result.Error = "read_error"
+		return result
+	}
+
+	var appstream struct {
+		Releases []struct {
+			Version   string `json:"version"`
+			Timestamp string `json:"timestamp"`
+		} `json:"releases"`
+	}
+
+	if err := json.Unmarshal(body, &appstream); err != nil {
+		result.Error = "parse_error"
+		return result
+	}
+
+	if len(appstream.Releases) == 0 {
+		result.Error = "no_releases"
+		return result
+	}
+
+	latest := appstream.Releases[0].Version
+	result.LatestVersion = latest
+	result.ReleaseURL = "https://flathub.org/apps/io.scottlabs.reManager"
+	result.UpdateAvailable = isNewerVersion(version, latest)
+
+	debug.Printf("[DEBUG] checkFlatpakUpdate: current=%s, latest=%s, updateAvailable=%v\n",
+		version, latest, result.UpdateAvailable)
+
+	return result
+}
+
+func (a *App) checkGitHubUpdate(result UpdateCheckResult) UpdateCheckResult {
+	client := httputil.NewClient(10 * time.Second)
+	resp, err := client.Get("https://api.github.com/repos/rmitchellscott/remanager/releases/latest")
+	if err != nil {
+		debug.Printf("[DEBUG] checkGitHubUpdate: request failed: %v\n", err)
+		result.Error = "network_error"
+		return result
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		debug.Printf("[DEBUG] checkGitHubUpdate: HTTP %d\n", resp.StatusCode)
 		result.Error = "api_error"
 		return result
 	}
@@ -3018,7 +3075,7 @@ func (a *App) CheckForAppUpdate() UpdateCheckResult {
 	result.ReleaseURL = release.HTMLURL
 	result.UpdateAvailable = isNewerVersion(version, release.TagName)
 
-	debug.Printf("[DEBUG] CheckForAppUpdate: current=%s, latest=%s, updateAvailable=%v\n",
+	debug.Printf("[DEBUG] checkGitHubUpdate: current=%s, latest=%s, updateAvailable=%v\n",
 		version, release.TagName, result.UpdateAvailable)
 
 	return result
