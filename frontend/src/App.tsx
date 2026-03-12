@@ -407,6 +407,7 @@ export default function App() {
   const [showCheckOSDialog, setShowCheckOSDialog] = useState(false)
 
   const [osMismatchDetected, setOsMismatchDetected] = useState(false)
+  const osMismatchDetectedRef = useRef(false)
   const [storedOsVersion, setStoredOsVersion] = useState('')
   const [currentOsVersion, setCurrentOsVersion] = useState('')
   const [checklistLoading, setChecklistLoading] = useState(false)
@@ -941,7 +942,7 @@ export default function App() {
       await rescanAllPackages()
 
       // Re-check OS compatibility after uninstall (packages may now be compatible)
-      if (osMismatchDetected) {
+      if (osMismatchDetectedRef.current) {
         window.go.main.App.GetPackageCompatibilityStatus().then(status => {
           setCompatibilityStatus(status)
         }).catch(() => {})
@@ -1116,6 +1117,7 @@ export default function App() {
       const data = args[0] as { prevVersion: string; newVersion: string }
       debugLog('Received os:mismatch:', data)
       setOsMismatchDetected(true)
+      osMismatchDetectedRef.current = true
       setStoredOsVersion(data.prevVersion)
       setCurrentOsVersion(data.newVersion)
     })
@@ -1148,6 +1150,7 @@ export default function App() {
       setChecklistLoading(false)
       if (result.success) {
         setOsMismatchDetected(false)
+        osMismatchDetectedRef.current = false
         setCompatibilityStatus(null)
         setRescanning(true)
         try {
@@ -1481,6 +1484,7 @@ export default function App() {
     setOutput('')
     setHashtabMismatch(null)
     setOsMismatchDetected(false)
+    osMismatchDetectedRef.current = false
     setOsUpgradeDetected(false)
     setCompatibilityStatus(null)
     setStoredOsVersion('')
