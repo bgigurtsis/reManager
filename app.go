@@ -5213,23 +5213,17 @@ func (a *App) StartPreventSleep() error {
 		ticker := time.NewTicker(60 * time.Second)
 		defer ticker.Stop()
 
-		debug.Println("[DEBUG] StartPreventSleep goroutine: sending pen-enter")
-		if err := a.pokePenDevice(penDevice, true); err != nil {
-			debug.Printf("[DEBUG] StartPreventSleep goroutine: pen-enter failed: %v\n", err)
-		}
-
 		for {
 			select {
 			case <-ticker.C:
-				debug.Println("[DEBUG] StartPreventSleep goroutine: re-asserting pen hover")
-				a.pokePenDevice(penDevice, false)
-				time.Sleep(50 * time.Millisecond)
+				debug.Println("[DEBUG] StartPreventSleep goroutine: pulsing pen proximity")
 				if err := a.pokePenDevice(penDevice, true); err != nil {
 					debug.Printf("[DEBUG] StartPreventSleep goroutine: pen-enter failed: %v\n", err)
 				}
-			case <-stopCh:
-				debug.Println("[DEBUG] StartPreventSleep goroutine: sending pen-leave")
+				time.Sleep(50 * time.Millisecond)
 				a.pokePenDevice(penDevice, false)
+			case <-stopCh:
+				debug.Println("[DEBUG] StartPreventSleep goroutine: stopped")
 				return
 			}
 		}
