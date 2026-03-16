@@ -825,6 +825,29 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 			if timezoneStatus.NeedsUpdate {
 				runtime.EventsEmit(a.ctx, "timezone:mismatch", timezoneStatus)
 			}
+
+			settings, _ := a.settingsStore.Load()
+			proxyEnabled := settings == nil || settings.ProxyMode
+
+			if proxyEnabled {
+				a.mu.Lock()
+				sshClient := a.client
+				a.mu.Unlock()
+				if sshClient != nil {
+					arch := device.GetArchitecture(component.DeviceType(deviceType))
+					proxy := vellum.NewProxy(a.vellumClient, sshClient, string(arch))
+					_ = proxy.UploadAPKINDEX(func(msg string) {
+						debug.Printf("[DEBUG] Upgrade check APKINDEX: %s\n", msg)
+					})
+				}
+			}
+
+			upgradeResult, simErr := a.vellumClient.SimulateUpgrade()
+			if simErr == nil && upgradeResult.HasUpgrades {
+				runtime.EventsEmit(a.ctx, "packages:upgrades-available", map[string]interface{}{
+					"packages": upgradeResult.Packages,
+				})
+			}
 		}
 	}()
 
@@ -1947,6 +1970,31 @@ func (a *App) RunPackageUpgrade() {
 	}
 
 	go func() {
+		settings, _ := a.settingsStore.Load()
+		proxyEnabled := settings == nil || settings.ProxyMode
+
+		a.mu.Lock()
+		sshClient := a.client
+		dt := a.connectedDeviceType
+		a.mu.Unlock()
+
+		if proxyEnabled && sshClient != nil {
+			arch := device.GetArchitecture(component.DeviceType(dt))
+			proxy := vellum.NewProxy(a.vellumClient, sshClient, string(arch))
+			runtime.EventsEmit(a.ctx, "command:output", "Downloading upgrade packages via reManager...\n")
+			err := proxy.ProxyUpgradeDownload(func(progress vellum.ProxyProgress) {
+				runtime.EventsEmit(a.ctx, "command:output", progress.Message+"\n")
+			})
+			if err != nil {
+				runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("\nProxy download failed: %v\n", err))
+				runtime.EventsEmit(a.ctx, "package-upgrade:complete", map[string]interface{}{
+					"success":  false,
+					"dnsError": false,
+				})
+				return
+			}
+		}
+
 		runtime.EventsEmit(a.ctx, "command:output", "Running vellum upgrade...\n")
 
 		var dnsError bool
@@ -2126,6 +2174,31 @@ func (a *App) RunUpgrade() {
 			}
 
 			runtime.EventsEmit(a.ctx, "command:output", "All packages compatible. Proceeding with upgrade...\n\n")
+		}
+
+		settings, _ := a.settingsStore.Load()
+		proxyEnabled := settings == nil || settings.ProxyMode
+
+		a.mu.Lock()
+		sshClient := a.client
+		dt := a.connectedDeviceType
+		a.mu.Unlock()
+
+		if proxyEnabled && sshClient != nil {
+			arch := device.GetArchitecture(component.DeviceType(dt))
+			proxy := vellum.NewProxy(a.vellumClient, sshClient, string(arch))
+			runtime.EventsEmit(a.ctx, "command:output", "Downloading upgrade packages via reManager...\n")
+			proxyErr := proxy.ProxyUpgradeDownload(func(progress vellum.ProxyProgress) {
+				runtime.EventsEmit(a.ctx, "command:output", progress.Message+"\n")
+			})
+			if proxyErr != nil {
+				runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("\nProxy download failed: %v\n", proxyErr))
+				runtime.EventsEmit(a.ctx, "upgrade:complete", map[string]interface{}{
+					"success":  false,
+					"dnsError": false,
+				})
+				return
+			}
 		}
 
 		runtime.EventsEmit(a.ctx, "command:output", "Running vellum upgrade...\n")
