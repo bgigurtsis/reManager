@@ -34,12 +34,14 @@ import (
 	"reManager/internal/commands"
 	"reManager/internal/component"
 	"reManager/internal/debug"
-	"reManager/internal/httputil"
 	"reManager/internal/device"
 	apperrors "reManager/internal/errors"
 	"reManager/internal/executor"
+	"reManager/internal/httputil"
 	"reManager/internal/installer"
 	"reManager/internal/logger"
+	"reManager/internal/pdfimport"
+	"reManager/internal/rmdocimport"
 	"reManager/internal/platform"
 	"reManager/internal/sshagent"
 	"reManager/internal/storage"
@@ -137,17 +139,17 @@ type App struct {
 	vellumClient   *vellum.Client
 	metadata       *vellum.MetadataStore
 
-	logger            *logger.Logger
-	operationLog      *logger.CommandLog
-	supportBundleID   string
+	logger          *logger.Logger
+	operationLog    *logger.CommandLog
+	supportBundleID string
 
-	keepaliveStop     chan struct{}
-	connectedDeviceID   string
-	connectedDeviceType string
-	writeableRootBusy   bool
-	reconnecting        bool
-	reconnectMu       sync.Mutex
-	fastDialMode      bool
+	keepaliveStop          chan struct{}
+	connectedDeviceID      string
+	connectedDeviceType    string
+	writeableRootBusy      bool
+	reconnecting           bool
+	reconnectMu            sync.Mutex
+	fastDialMode           bool
 	installCancelCh        chan struct{}
 	backupCancelCh         chan struct{}
 	backupMu               sync.Mutex
@@ -1787,18 +1789,18 @@ func (a *App) SetDeviceTimezone(timezone string, deviceType string) {
 }
 
 type PackageInfo struct {
-	Name           string              `json:"name"`
-	Version        string              `json:"version"`
-	Description    string              `json:"description"`
-	UpstreamAuthor string              `json:"upstreamAuthor"`
-	Categories     []string            `json:"categories"`
-	URL            string              `json:"url"`
-	License        string              `json:"license"`
-	Devices        []string            `json:"devices"`
-	Depends        []string            `json:"depends"`
-	Conflicts      []string            `json:"conflicts"`
-	OSMin          *string             `json:"osMin"`
-	OSMax          *string             `json:"osMax"`
+	Name           string                `json:"name"`
+	Version        string                `json:"version"`
+	Description    string                `json:"description"`
+	UpstreamAuthor string                `json:"upstreamAuthor"`
+	Categories     []string              `json:"categories"`
+	URL            string                `json:"url"`
+	License        string                `json:"license"`
+	Devices        []string              `json:"devices"`
+	Depends        []string              `json:"depends"`
+	Conflicts      []string              `json:"conflicts"`
+	OSMin          *string               `json:"osMin"`
+	OSMax          *string               `json:"osMax"`
 	OSConstraints  []vellum.OSConstraint `json:"osConstraints"`
 }
 
@@ -5202,6 +5204,219 @@ func (a *App) RestartXochitl() error {
 	_, err = session.CombinedOutput("systemctl restart xochitl")
 	if err != nil {
 		return fmt.Errorf("failed to restart xochitl: %w", err)
+	}
+
+	return nil
+}
+
+// SelectPDFFile opens a native file dialog filtered to PDF files and returns
+// the chosen path, or an empty string if the user cancelled.
+func (a *App) SelectPDFFile() string {
+	if platform.IsRunningInFlatpak() {
+		home, _ := os.UserHomeDir()
+		files, err := filechooser.OpenFile("", "Select PDF", &filechooser.OpenFileOptions{
+			CurrentFolder: home,
+		})
+		if err != nil || len(files) == 0 {
+			return ""
+		}
+		return strings.TrimPrefix(files[0], "file://")
+	}
+	home, _ := os.UserHomeDir()
+	p, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
+		Title:            "Select PDF",
+		DefaultDirectory: home,
+		Filters: []runtime.FileFilter{
+			{DisplayName: "PDF files", Pattern: "*.pdf"},
+		},
+	})
+	if err != nil {
+		return ""
+	}
+	return p
+}
+
+type PDFFileInfo struct {
+	Path      string `json:"path"`
+	Size      int64  `json:"size"`
+	PageCount int    `json:"pageCount"`
+}
+
+func (a *App) SelectPDFFiles() []string {
+	return a.SelectImportFiles()
+}
+
+func (a *App) SelectImportFiles() []string {
+	if platform.IsRunningInFlatpak() {
+		home, _ := os.UserHomeDir()
+		files, err := filechooser.OpenFile("", "Select documents", &filechooser.OpenFileOptions{
+			CurrentFolder: home,
+			Multiple:      true,
+			Filters: []*filechooser.Filter{
+				{Name: "Documents", Rules: []filechooser.Rule{
+					{Type: filechooser.GlobPattern, Pattern: "*.pdf"},
+					{Type: filechooser.GlobPattern, Pattern: "*.rmdoc"},
+				}},
+			},
+		})
+		if err != nil || len(files) == 0 {
+			return []string{}
+		}
+		for i, f := range files {
+			files[i] = strings.TrimPrefix(f, "file://")
+		}
+		return files
+	}
+	home, _ := os.UserHomeDir()
+	files, err := runtime.OpenMultipleFilesDialog(a.ctx, runtime.OpenDialogOptions{
+		Title:            "Select documents",
+		DefaultDirectory: home,
+		Filters: []runtime.FileFilter{
+			{DisplayName: "Documents (PDF, rmdoc)", Pattern: "*.pdf;*.rmdoc"},
+		},
+	})
+	if err != nil {
+		return []string{}
+	}
+	return files
+}
+
+func (a *App) GetPDFFileInfo(localPath string) (PDFFileInfo, error) {
+	info, err := os.Stat(localPath)
+	if err != nil {
+		return PDFFileInfo{}, fmt.Errorf("failed to stat file: %w", err)
+	}
+	pdfData, err := os.ReadFile(localPath)
+	if err != nil {
+		return PDFFileInfo{}, fmt.Errorf("failed to read file: %w", err)
+	}
+	return PDFFileInfo{
+		Path:      localPath,
+		Size:      info.Size(),
+		PageCount: pdfimport.EstimatePageCount(pdfData),
+	}, nil
+}
+
+type ImportFileInfo struct {
+	Path        string `json:"path"`
+	Size        int64  `json:"size"`
+	PageCount   int    `json:"pageCount"`
+	FileType    string `json:"fileType"`
+	VisibleName string `json:"visibleName"`
+}
+
+func (a *App) GetImportFileInfo(localPath string) (ImportFileInfo, error) {
+	info, err := os.Stat(localPath)
+	if err != nil {
+		return ImportFileInfo{}, fmt.Errorf("failed to stat file: %w", err)
+	}
+
+	ext := strings.ToLower(filepath.Ext(localPath))
+	switch ext {
+	case ".pdf":
+		pdfData, err := os.ReadFile(localPath)
+		if err != nil {
+			return ImportFileInfo{}, fmt.Errorf("failed to read file: %w", err)
+		}
+		return ImportFileInfo{
+			Path:      localPath,
+			Size:      info.Size(),
+			PageCount: pdfimport.EstimatePageCount(pdfData),
+			FileType:  "pdf",
+		}, nil
+	case ".rmdoc":
+		zipData, err := os.ReadFile(localPath)
+		if err != nil {
+			return ImportFileInfo{}, fmt.Errorf("failed to read file: %w", err)
+		}
+		rmdocInfo, err := rmdocimport.Inspect(zipData)
+		if err != nil {
+			return ImportFileInfo{}, fmt.Errorf("failed to inspect rmdoc: %w", err)
+		}
+		return ImportFileInfo{
+			Path:        localPath,
+			Size:        info.Size(),
+			PageCount:   rmdocInfo.PageCount,
+			FileType:    "rmdoc",
+			VisibleName: rmdocInfo.VisibleName,
+		}, nil
+	default:
+		return ImportFileInfo{}, fmt.Errorf("unsupported file type: %s", ext)
+	}
+}
+
+func (a *App) ImportRmdocFromPath(localPath, visibleName string, restartXochitl bool) error {
+	a.mu.Lock()
+	client := a.client
+	a.mu.Unlock()
+
+	if client == nil {
+		return fmt.Errorf("not connected")
+	}
+
+	zipData, err := os.ReadFile(localPath)
+	if err != nil {
+		return fmt.Errorf("failed to read rmdoc: %w", err)
+	}
+
+	sftpClient, err := sftp.NewClient(client)
+	if err != nil {
+		return fmt.Errorf("failed to create SFTP client: %w", err)
+	}
+	defer sftpClient.Close()
+
+	if _, err := rmdocimport.Upload(sftpClient, zipData, visibleName); err != nil {
+		return err
+	}
+
+	if restartXochitl {
+		if err := a.RestartXochitl(); err != nil {
+			return fmt.Errorf("uploaded, but %w", err)
+		}
+	}
+
+	return nil
+}
+
+// ImportPDFFromPath reads the PDF at localPath, generates xochitl sidecar files,
+// and uploads the bundle over the active SFTP connection.
+// pageCountOverride can be set to a positive value when auto-detection fails.
+func (a *App) ImportPDFFromPath(localPath, visibleName string, restartXochitl bool, pageCountOverride int, coverPageNumber *int) error {
+	a.mu.Lock()
+	client := a.client
+	a.mu.Unlock()
+
+	if client == nil {
+		return fmt.Errorf("not connected")
+	}
+
+	pdfData, err := os.ReadFile(localPath)
+	if err != nil {
+		return fmt.Errorf("failed to read PDF: %w", err)
+	}
+
+	pageCount := pageCountOverride
+	if pageCount <= 0 {
+		pageCount = pdfimport.EstimatePageCount(pdfData)
+	}
+	if pageCount <= 0 {
+		return fmt.Errorf("Could not determine page count from PDF.")
+	}
+
+	sftpClient, err := sftp.NewClient(client)
+	if err != nil {
+		return fmt.Errorf("failed to create SFTP client: %w", err)
+	}
+	defer sftpClient.Close()
+
+	if _, err := pdfimport.Upload(sftpClient, pdfData, visibleName, "", pageCount, coverPageNumber); err != nil {
+		return err
+	}
+
+	if restartXochitl {
+		if err := a.RestartXochitl(); err != nil {
+			return fmt.Errorf("uploaded, but %w", err)
+		}
 	}
 
 	return nil

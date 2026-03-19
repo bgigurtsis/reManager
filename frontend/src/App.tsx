@@ -29,6 +29,7 @@ import { CheckOSDialog } from '@/components/CheckOSDialog'
 import { SupportBundlePage } from '@/components/SupportBundlePage'
 import { DnsErrorModal } from '@/components/DnsErrorModal'
 import { FilesystemRestoreErrorDialog } from '@/components/FilesystemRestoreErrorDialog'
+import { ImportPDFDialog } from '@/components/ImportPDFDialog'
 import { TimezoneCombobox } from '@/components/TimezoneCombobox'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { Badge } from '@/components/ui/badge'
@@ -229,7 +230,14 @@ declare global {
           ReadConfigFile(): Promise<string>
           WriteConfigFile(content: string): Promise<void>
           BackupConfigFile(): Promise<string>
-          ListConfigBackups(): Promise<Array<{name: string; timestamp: number; size: number}>>
+          SelectPDFFile(): Promise<string>
+          SelectPDFFiles(): Promise<string[]>
+          SelectImportFiles(): Promise<string[]>
+          GetPDFFileInfo(localPath: string): Promise<{ path: string; size: number; pageCount: number }>
+          GetImportFileInfo(localPath: string): Promise<{ path: string; size: number; pageCount: number; fileType: string; visibleName: string }>
+          ImportPDFFromPath(localPath: string, visibleName: string, restartXochitl: boolean, pageCountOverride: number, coverPageNumber: number | null): Promise<void>
+          ImportRmdocFromPath(localPath: string, visibleName: string, restartXochitl: boolean): Promise<void>
+          ListConfigBackups(): Promise<Array<{ name: string; timestamp: number; size: number }>>
           RestoreConfigBackup(backupName: string): Promise<void>
           SelectBackupFile(): Promise<string>
           CreateDeviceBackup(destPath: string): void
@@ -330,6 +338,7 @@ export default function App() {
   const [showSettingsDialog, setShowSettingsDialog] = useState(false)
   const [showSupportBundles, setShowSupportBundles] = useState(false)
   const [showFileBrowser, setShowFileBrowser] = useState(false)
+  const [showImportPDF, setShowImportPDF] = useState(false)
   const [showConfigEditor, setShowConfigEditor] = useState(false)
   const [backupDialogMode, setBackupDialogMode] = useState<'backup' | 'restore' | null>(null)
   const [isTerminalRunning, setIsTerminalRunning] = useState(false)
@@ -2915,6 +2924,22 @@ export default function App() {
                       </Button>
                     </CardContent>
                   </Card>
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>Document Import</CardTitle>
+                      <CardDescription>Upload documents to your reMarkable library</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <Button
+                        className="w-full"
+                        variant="outline"
+                        onClick={() => setShowImportPDF(true)}
+                        disabled={connectionStatus !== 'connected'}
+                      >
+                        Import
+                      </Button>
+                    </CardContent>
+                  </Card>
                 </div>
               </TabsContent>
             )}
@@ -3195,6 +3220,12 @@ export default function App() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ImportPDFDialog
+        open={showImportPDF}
+        isConnected={connectionStatus === 'connected'}
+        onOpenChange={setShowImportPDF}
+      />
 
       {/* Backup & Restore Dialog */}
       <BackupRestoreDialog
