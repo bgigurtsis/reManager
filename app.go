@@ -2141,12 +2141,12 @@ func (a *App) CheckOSCompatibility(targetOS string) CompatibilityResultJSON {
 }
 
 type PackageCompatibilityStatus struct {
-	InstalledPackages    []string `json:"installedPackages"`
-	CompatiblePackages   []string `json:"compatiblePackages"`
-	IncompatiblePackages []string `json:"incompatiblePackages"`
-	CurrentOsVersion     string   `json:"currentOsVersion"`
-	StoredOsVersion      string   `json:"storedOsVersion"`
-	FetchFailed          bool     `json:"fetchFailed"`
+	InstalledPackages    []string          `json:"installedPackages"`
+	CompatiblePackages   []string          `json:"compatiblePackages"`
+	IncompatiblePackages []string          `json:"incompatiblePackages"`
+	CurrentOsVersion     string            `json:"currentOsVersion"`
+	StoredOsVersion      string            `json:"storedOsVersion"`
+	FetchFailed          bool              `json:"fetchFailed"`
 }
 
 func (a *App) GetPackageCompatibilityStatus() PackageCompatibilityStatus {
