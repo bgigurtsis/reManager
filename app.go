@@ -5421,6 +5421,110 @@ func (a *App) IsSleepScreenSupported() bool {
 	return major > 3
 }
 
+func (a *App) GetSleepScreen() (string, error) {
+	a.mu.Lock()
+	client := a.client
+	a.mu.Unlock()
+
+	if client == nil {
+		return "", fmt.Errorf("not connected")
+	}
+
+	sftpClient, err := sftp.NewClient(client)
+	if err != nil {
+		return "", fmt.Errorf("failed to create SFTP client: %w", err)
+	}
+	defer sftpClient.Close()
+
+	configPath := "/home/root/.config/remarkable/xochitl.conf"
+
+	file, err := sftpClient.Open(configPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to open config file: %w", err)
+	}
+	content, err := io.ReadAll(file)
+	file.Close()
+	if err != nil {
+		return "", fmt.Errorf("failed to read config file: %w", err)
+	}
+
+	cfg, err := ini.Load(content)
+	if err != nil {
+		return "", fmt.Errorf("invalid config file syntax: %w", err)
+	}
+
+	section := cfg.Section("General")
+	if !section.HasKey("SleepScreenPath") {
+		return "", nil
+	}
+	return section.Key("SleepScreenPath").String(), nil
+}
+
+func (a *App) ResetSleepScreen() error {
+	a.mu.Lock()
+	client := a.client
+	a.mu.Unlock()
+
+	if client == nil {
+		return fmt.Errorf("not connected")
+	}
+
+	sftpClient, err := sftp.NewClient(client)
+	if err != nil {
+		return fmt.Errorf("failed to create SFTP client: %w", err)
+	}
+	defer sftpClient.Close()
+
+	configPath := "/home/root/.config/remarkable/xochitl.conf"
+
+	file, err := sftpClient.Open(configPath)
+	if err != nil {
+		return fmt.Errorf("failed to open config file: %w", err)
+	}
+	content, err := io.ReadAll(file)
+	file.Close()
+	if err != nil {
+		return fmt.Errorf("failed to read config file: %w", err)
+	}
+
+	cfg, err := ini.Load(content)
+	if err != nil {
+		return fmt.Errorf("invalid config file syntax: %w", err)
+	}
+
+	section := cfg.Section("General")
+	section.DeleteKey("SleepScreenPath")
+
+	var buf bytes.Buffer
+	_, err = cfg.WriteTo(&buf)
+	if err != nil {
+		return fmt.Errorf("failed to serialize config: %w", err)
+	}
+
+	tmpPath := configPath + ".tmp"
+	tmpFile, err := sftpClient.Create(tmpPath)
+	if err != nil {
+		return fmt.Errorf("failed to create temp file: %w", err)
+	}
+
+	_, err = tmpFile.Write(buf.Bytes())
+	if err != nil {
+		tmpFile.Close()
+		sftpClient.Remove(tmpPath)
+		return fmt.Errorf("failed to write to temp file: %w", err)
+	}
+	tmpFile.Close()
+
+	_ = sftpClient.Remove(configPath)
+	err = sftpClient.Rename(tmpPath, configPath)
+	if err != nil {
+		sftpClient.Remove(tmpPath)
+		return fmt.Errorf("failed to rename temp file: %w", err)
+	}
+
+	return nil
+}
+
 func (a *App) SetSleepScreen(imagePath string) error {
 	a.mu.Lock()
 	client := a.client
