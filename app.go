@@ -2456,8 +2456,16 @@ func (a *App) SimulateUninstall(packageNames []string) (*UninstallSimulationResu
 
 	simResult, err := a.vellumClient.SimulateDel(packageNames...)
 	if err != nil {
-		debug.Printf("[DEBUG] SimulateDel failed: %v\n", err)
-		return &UninstallSimulationResult{Packages: packageNames}, nil
+		debug.Printf("[DEBUG] SimulateDel failed: %v, trying recursive\n", err)
+		recursiveList, rErr := a.vellumClient.SimulateDelRecursive(packageNames...)
+		if rErr != nil {
+			debug.Printf("[DEBUG] SimulateDelRecursive also failed: %v\n", rErr)
+			return &UninstallSimulationResult{Packages: packageNames}, nil
+		}
+		return &UninstallSimulationResult{
+			Packages:          packageNames,
+			RecursivePackages: recursiveList,
+		}, nil
 	}
 
 	packages := simResult.Packages
@@ -2783,8 +2791,13 @@ func (a *App) UninstallPackages(packageNames []string, deviceType string) {
 		if a.vellumClient != nil {
 			simResult, err := a.vellumClient.SimulateDel(packageNames...)
 			if err != nil {
-				debug.Printf("[DEBUG] SimulateDel failed: %v, using packageNames only\n", err)
-				allPackages = packageNames
+				debug.Printf("[DEBUG] SimulateDel failed: %v, trying recursive\n", err)
+				useRecursive = true
+				allPackages, err = a.vellumClient.SimulateDelRecursive(packageNames...)
+				if err != nil {
+					debug.Printf("[DEBUG] SimulateDelRecursive also failed: %v\n", err)
+					allPackages = packageNames
+				}
 			} else if len(simResult.Blocked) > 0 || len(simResult.Packages) == 0 {
 				worldToRemove, allAffected, wErr := a.resolveWorldDeps(packageNames)
 				if wErr != nil || len(worldToRemove) == 0 {
