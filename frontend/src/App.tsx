@@ -238,6 +238,7 @@ declare global {
           SelectImportFiles(): Promise<string[]>
           GetPDFFileInfo(localPath: string): Promise<{ path: string; size: number; pageCount: number }>
           GetImportFileInfo(localPath: string): Promise<{ path: string; size: number; pageCount: number; fileType: string; visibleName: string }>
+          ImportEpubFromPath(localPath: string, visibleName: string, restartXochitl: boolean): Promise<void>
           ImportPDFFromPath(localPath: string, visibleName: string, restartXochitl: boolean, pageCountOverride: number, coverPageNumber: number | null): Promise<void>
           ImportRmdocFromPath(localPath: string, visibleName: string, restartXochitl: boolean): Promise<void>
           ListConfigBackups(): Promise<Array<{ name: string; timestamp: number; size: number }>>
