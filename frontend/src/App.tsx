@@ -2840,7 +2840,8 @@ export default function App() {
                     <CardContent className="space-y-4">
                       {/* Vellum Commands */}
                       <div>
-                        <h4 className="font-medium mb-2">Vellum</h4>
+                        <h4 className="font-medium">Vellum</h4>
+                        <p className="text-sm text-muted-foreground mb-2">Package manager for reMarkable tablets</p>
                         <div className="grid grid-cols-3 gap-2">
                           <Tooltip>
                             <TooltipTrigger asChild>
@@ -2897,7 +2898,8 @@ export default function App() {
                         <div className="space-y-4">
                           {packages.filter(p => installedPackages.has(p.name) && maintenanceCommands[p.name]).sort((a, b) => a.name.localeCompare(b.name)).map((pkg) => (
                             <div key={pkg.name}>
-                              <h4 className="font-medium mb-2">{pkg.name}</h4>
+                              <h4 className="font-medium">{pkg.name}</h4>
+                              {pkg.description && <p className="text-sm text-muted-foreground mb-2">{pkg.description}</p>}
                               <div className="grid grid-cols-3 gap-2">
                                 {maintenanceCommands[pkg.name]?.map((cmd) => {
                                   const isRunning = currentRunningCommand?.componentId === pkg.name &&
