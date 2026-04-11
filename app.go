@@ -851,6 +851,12 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 			warnings["autoUpdateEnabled"] = updateStatus
 		}
 
+		xochitlRunning := a.GetXochitlStatus()
+		debug.Printf("[DEBUG] Xochitl check: running=%v\n", xochitlRunning)
+		if !xochitlRunning {
+			warnings["xochitlNotRunning"] = true
+		}
+
 		timezoneStatus := a.GetTimezoneStatus()
 		debug.Printf("[DEBUG] Timezone check: device=%s, saved=%s, needsUpdate=%v\n",
 			timezoneStatus.DeviceTimezone, timezoneStatus.SavedTimezone, timezoneStatus.NeedsUpdate)
@@ -1623,6 +1629,21 @@ func (a *App) GetUpdateServiceStatus() UpdateServiceStatus {
 
 	debug.Printf("[DEBUG] GetUpdateServiceStatus: returning enabled=%v, running=%v\n", status.Enabled, status.Running)
 	return status
+}
+
+func (a *App) GetXochitlStatus() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.client == nil {
+		return false
+	}
+
+	output, err := a.runCommand("systemctl is-active xochitl")
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(output) == "active"
 }
 
 type HashtabVersionStatus struct {

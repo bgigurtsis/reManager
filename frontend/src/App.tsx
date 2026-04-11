@@ -35,6 +35,7 @@ import { SoftwareManagerDialog } from '@/components/SoftwareManagerDialog'
 import { TimezoneCombobox } from '@/components/TimezoneCombobox'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { Badge } from '@/components/ui/badge'
+import { Alert, AlertTitle, AlertDescription, AlertAction } from '@/components/ui/alert'
 import { Loader2, Unplug, Check, AlertTriangle, AlertCircle, Trash2, Plus, X, Search, Settings, WifiOff, Eye, EyeOff, RefreshCw, Info, LifeBuoy } from 'lucide-react'
 
 interface PackageInfo {
@@ -168,6 +169,7 @@ declare global {
           IsShellActive(): Promise<boolean>
           GetDeviceInfo(): Promise<Record<string, string>>
           GetUpdateServiceStatus(): Promise<UpdateServiceStatus>
+          GetXochitlStatus(): Promise<boolean>
           GetDefaultSSHKeys(): Promise<SSHKey[]>
           SelectKeyFile(): Promise<string>
           GetSavedDevices(): Promise<SavedDevice[]>
@@ -351,6 +353,7 @@ export default function App() {
     running: false,
   })
   const [showAutoUpdateBanner, setShowAutoUpdateBanner] = useState(false)
+  const [xochitlRunning, setXochitlRunning] = useState(true)
   const [commandContext, setCommandContext] = useState<'install' | 'maintenance' | null>(null)
   const commandContextRef = useRef<'install' | 'maintenance' | null>(null)
   const runningSystemTaskRef = useRef<string | null>(null)
@@ -678,6 +681,14 @@ export default function App() {
   }, [updateServiceStatus.enabled])
 
   useEffect(() => {
+    if (connectionStatus !== 'connected' || commandRunning) return
+    const interval = window.setInterval(() => {
+      window.go.main.App.GetXochitlStatus().then(setXochitlRunning).catch(() => {})
+    }, 60000)
+    return () => clearInterval(interval)
+  }, [connectionStatus, commandRunning])
+
+  useEffect(() => {
     if (activeTab === 'mods' && !tabVisibility.mods) {
       setActiveTab('maintenance')
     }
@@ -735,6 +746,7 @@ export default function App() {
     setUninstalling(false)
     setRunningReenable(false)
     setSimulatingUpgrade(false)
+    setXochitlRunning(true)
   }
 
   const refreshDeviceState = async (deviceType: string) => {
@@ -892,6 +904,8 @@ export default function App() {
           setSettingTimezone(false)
           const status = await window.go.main.App.GetUpdateServiceStatus()
           setUpdateServiceStatus(status)
+          const xochitlStatus = await window.go.main.App.GetXochitlStatus()
+          setXochitlRunning(xochitlStatus)
         }
         return
       }
@@ -928,6 +942,8 @@ export default function App() {
           updateStatus = await window.go.main.App.GetUpdateServiceStatus()
         }
         setUpdateServiceStatus(updateStatus)
+        const xochitlStatus = await window.go.main.App.GetXochitlStatus()
+        setXochitlRunning(xochitlStatus)
         if (hashtabStatus.needsRebuild) {
           setHashtabMismatch(hashtabStatus)
         } else {
@@ -949,6 +965,8 @@ export default function App() {
         setSettingTimezone(false)
         setCommandContext(null)
       } else {
+        const xochitlStatus = await window.go.main.App.GetXochitlStatus()
+        setXochitlRunning(xochitlStatus)
         setCommandRunning(false)
         setRunningSystemTask(null)
         setSettingTimezone(false)
@@ -1015,6 +1033,9 @@ export default function App() {
       } else {
         setHashtabMismatch(null)
       }
+
+      const xochitlStatus = await window.go.main.App.GetXochitlStatus()
+      setXochitlRunning(xochitlStatus)
 
       setInstalling(false)
       setUninstalling(false)
@@ -1136,6 +1157,7 @@ export default function App() {
         autoUpdateEnabled?: { enabled: boolean; running: boolean }
         timezoneStatus?: TimezoneStatus
         timezoneMismatch?: TimezoneStatus
+        xochitlNotRunning?: boolean
       }
       debugLog('Received connect:warnings:', w)
       setWarningsChecked(true)
@@ -1171,6 +1193,7 @@ export default function App() {
         setDeviceTimezone(w.timezoneMismatch.deviceTimezone)
         setSelectedTimezone(w.timezoneMismatch.savedTimezone || w.timezoneMismatch.deviceTimezone)
       }
+      setXochitlRunning(!w.xochitlNotRunning)
     })
 
     const unsubscribeTimezoneComplete = window.runtime.EventsOn('timezone:complete', (...args: unknown[]) => {
@@ -1264,6 +1287,8 @@ export default function App() {
         await rescanAllPackages()
         setRescanning(false)
       }
+      const xochitlStatus = await window.go.main.App.GetXochitlStatus()
+      setXochitlRunning(xochitlStatus)
       setCommandRunning(false)
       setCommandContext(null)
       if (result.dnsError && !dnsErrorShown) {
@@ -1290,6 +1315,8 @@ export default function App() {
         updateStatus = await window.go.main.App.GetUpdateServiceStatus()
       }
       setUpdateServiceStatus(updateStatus)
+      const xochitlStatus = await window.go.main.App.GetXochitlStatus()
+      setXochitlRunning(xochitlStatus)
       if (hashtabStatus.needsRebuild) {
         setHashtabMismatch(hashtabStatus)
       } else {
@@ -1792,6 +1819,9 @@ export default function App() {
     setActiveTab(value)
     if (value === 'mods') {
       await rescanAllPackages()
+    }
+    if (connectionStatus === 'connected' && !commandRunning) {
+      window.go.main.App.GetXochitlStatus().then(setXochitlRunning).catch(() => {})
     }
   }
 
@@ -2307,6 +2337,24 @@ export default function App() {
           </div>
         )}
 
+        {/* Xochitl Not Running Banner */}
+        {step !== 'connect' && !xochitlRunning && !commandRunning && !showProgressModal && connectionStatus === 'connected' && (
+          <div className="mb-4">
+            <Alert variant="destructive">
+              <AlertCircle className="h-4 w-4" />
+              <AlertTitle>reMarkable screen may be unresponsive</AlertTitle>
+              <AlertDescription>
+                The xochitl UI service is not running on the reMarkable.
+              </AlertDescription>
+              <AlertAction className="top-1/2 -translate-y-1/2">
+                <Button size="sm" variant="destructive" onClick={() => handleSystemTask('restart-xochitl')}>
+                  Start
+                </Button>
+              </AlertAction>
+            </Alert>
+          </div>
+        )}
+
         {/* Warning Banner */}
         {step !== 'connect' && warningsChecked && (
           <div className="mb-4">
@@ -2731,7 +2779,7 @@ export default function App() {
                         {systemTasks.map((task) => {
                           const isEnableDisabled = task.id === 'enable-updates' && updateServiceStatus.enabled && updateServiceStatus.running
                           const isDisableDisabled = task.id === 'disable-updates' && !updateServiceStatus.enabled && !updateServiceStatus.running
-                          const shouldHighlight = task.id === 'disable-updates' && updateServiceStatus.enabled
+                          const shouldHighlight = (task.id === 'disable-updates' && updateServiceStatus.enabled) || (task.id === 'restart-xochitl' && !xochitlRunning)
                           const isRunning = runningSystemTask === task.id
                           return (
                             <Button
@@ -3342,6 +3390,9 @@ export default function App() {
               setMaintenanceOutput('')
               setLastInstallSuccess(null)
               setLastOperationType(null)
+              if (connectionStatus === 'connected') {
+                window.go.main.App.GetXochitlStatus().then(setXochitlRunning).catch(() => {})
+              }
             }
           }
         }}
