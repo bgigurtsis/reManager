@@ -11,6 +11,8 @@ A multi-platform desktop app for managing mods on reMarkable tablets.
 
 Powered by the [Vellum](https://github.com/vellum-dev) package manager. See the [package index](https://vellum.delivery) for a full list of supported packages.
 
+Video walkthrough of setup and features: https://www.youtube.com/watch?v=OsOIvY5btBQ&t
+
 ## Features
 
 - Multi-Device Management: Save multiple sets of SSH credentials with password or key-based authentication.
