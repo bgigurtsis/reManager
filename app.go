@@ -2485,6 +2485,7 @@ type DialogActionRequest struct {
 type DialogRequest struct {
 	Title             string                `json:"title"`
 	Message           string                `json:"message"`
+	Note              string                `json:"note"`
 	Steps             []string              `json:"steps"`
 	ConfirmText       string                `json:"confirmText"`
 	InProgressMessage string                `json:"inProgressMessage"`
@@ -2505,6 +2506,7 @@ func dialogRequestFromConfig(cfg *component.DialogConfig) DialogRequest {
 	return DialogRequest{
 		Title:             cfg.Title,
 		Message:           cfg.Message,
+		Note:              cfg.Note,
 		Steps:             cfg.Steps,
 		ConfirmText:       cfg.ConfirmText,
 		InProgressMessage: cfg.InProgressMessage,

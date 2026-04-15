@@ -16,7 +16,8 @@ func RebuildHashtableDialog(ctx component.CommandContext) (*component.HookExecut
 	return &component.HookExecutionResult{
 		DialogConfig: &component.DialogConfig{
 			Title:   "Rebuild Hashtable",
-			Message: "This process may take up to 2 minutes. You will need to rebuild the hashtable again after every OS upgrade.",
+			Message: "This process will restart the tablet interface and may take up to 2 minutes.",
+			Note:    "You will need to rebuild the hashtable again after every OS upgrade.",
 			Steps: []string{
 				"Restart the tablet interface",
 				"Ask for your passcode (if you have one set)",

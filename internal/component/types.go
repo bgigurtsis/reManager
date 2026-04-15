@@ -37,6 +37,7 @@ type DialogAction struct {
 type DialogConfig struct {
 	Title             string
 	Message           string
+	Note              string
 	Steps             []string
 	ConfirmText       string
 	InProgressMessage string

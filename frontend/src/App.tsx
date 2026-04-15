@@ -115,6 +115,7 @@ interface DialogActionRequest {
 interface DialogRequest {
   title: string
   message: string
+  note: string
   steps: string[]
   confirmText: string
   inProgressMessage: string
@@ -3476,16 +3477,25 @@ export default function App() {
               <DialogHeader>
                 <DialogTitle className="flex items-center gap-2">
                   <Info className="h-5 w-5 text-blue-500" />
-                  Mods Will Not Auto-Start
+                  Mods Will Not Automatically Start
                 </DialogTitle>
                 <DialogDescription>
                   <div className="space-y-4 pt-4">
                     <p>For technical reasons, UI mods do not auto-start after reboots. Each time your device restarts, you will need to manually start them using one of the following methods:</p>
-                    <ol className="list-decimal list-outside space-y-1 text-sm pl-8">
-                      <li>(Recommended) Install the tripletap package, then triple-press the power button on every boot</li>
-                      <li>Use the Start maintenance command in reManager</li>
-                      <li>Connect via SSH and run: <code className="text-xs bg-muted px-1.5 py-0.5 rounded">/home/root/xovi/start</code></li>
-                    </ol>
+                    <ul className="space-y-2 text-sm">
+                      <li className="flex items-start gap-2.5">
+                        <span className="flex-shrink-0 w-5 h-5 rounded-full bg-muted text-muted-foreground text-xs font-semibold flex items-center justify-center">1</span>
+                        <span><strong>Recommended:</strong> Install the <strong>tripletap</strong> package, then triple-press the power button after every boot</span>
+                      </li>
+                      <li className="flex items-start gap-2.5">
+                        <span className="flex-shrink-0 w-5 h-5 rounded-full bg-muted text-muted-foreground text-xs font-semibold flex items-center justify-center">2</span>
+                        <span>Use the <strong>Start</strong> maintenance command in reManager</span>
+                      </li>
+                      <li className="flex items-start gap-2.5">
+                        <span className="flex-shrink-0 w-5 h-5 rounded-full bg-muted text-muted-foreground text-xs font-semibold flex items-center justify-center">3</span>
+                        <span>Connect via SSH and run: <code className="text-xs bg-muted px-1.5 py-0.5 rounded">/home/root/xovi/start</code></span>
+                      </li>
+                    </ul>
                   </div>
                 </DialogDescription>
               </DialogHeader>
@@ -3494,7 +3504,7 @@ export default function App() {
                 <div className="flex items-center justify-between gap-3 rounded-lg border p-3 bg-muted/50">
                   <div className="min-w-0">
                     <div className="text-sm font-medium">tripletap</div>
-                    <div className="text-xs text-muted-foreground">Triple-press power button to start mods on boot</div>
+                    <div className="text-xs text-muted-foreground">Triple-press power button to start mods after reboot</div>
                   </div>
                   <Button
                     size="sm"
@@ -3502,7 +3512,7 @@ export default function App() {
                       setPendingXoviInfo([...pendingXoviInfo, 'tripletap'])
                     }}
                   >
-                    <Download className="h-3.5 w-3.5" />
+                    <Download className="h-3.5 w-3.5 mr-1" />
                     Add to install
                   </Button>
                 </div>
@@ -3512,7 +3522,7 @@ export default function App() {
                 <div className="flex items-center justify-between gap-3 rounded-lg border border-green-600/30 p-3 bg-green-50 dark:bg-green-950/30">
                   <div className="min-w-0">
                     <div className="text-sm font-medium">tripletap</div>
-                    <div className="text-xs text-muted-foreground">Triple-press power button to start mods on boot</div>
+                    <div className="text-xs text-muted-foreground">Triple-press power button to start mods after reboot</div>
                   </div>
                   <span className="text-sm text-green-600 dark:text-green-400 flex items-center gap-1.5">
                     <Check className="h-3.5 w-3.5" /> Added
@@ -3697,6 +3707,12 @@ export default function App() {
                 <DialogDescription>
                   <div className="space-y-4 pt-4">
                     <p>{dialogRequest?.message}</p>
+                    {dialogRequest?.note && (
+                      <div className="flex items-center gap-2 rounded-lg border p-3 bg-muted/50">
+                        <Info className="h-4 w-4 text-blue-500 flex-shrink-0" />
+                        <span className="text-xs text-muted-foreground">{dialogRequest.note}</span>
+                      </div>
+                    )}
                     {dialogRequest?.steps && dialogRequest.steps.length > 0 && (
                       <>
                         <p className="font-medium text-foreground">This will:</p>
