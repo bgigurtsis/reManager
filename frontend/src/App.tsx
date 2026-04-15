@@ -607,7 +607,7 @@ export default function App() {
         if (keys && keys.length > 0) {
           setSelectedKey(keys[0].path)
         } else {
-          setSelectedKey('__other__')
+          setSelectedKey('')
         }
         setSSHAgentAvailable(!!agentAvail)
 
@@ -646,7 +646,7 @@ export default function App() {
         }
       } catch (err) {
         debugLog('Could not load initial data:', err)
-        setSelectedKey('__other__')
+        setSelectedKey('')
       }
     }
     loadInitialData()
@@ -715,6 +715,8 @@ export default function App() {
         setSelectedKey(path)
         const fileName = path.split('/').pop() || path
         setCustomKeyName(fileName)
+      } else if (!selectedKey) {
+        setCustomKeyName('')
       }
     } else {
       setSelectedKey(value)
@@ -879,6 +881,8 @@ export default function App() {
     setDeviceName('')
     if (availableKeys.length > 0) {
       setSelectedKey(availableKeys[0].path)
+    } else {
+      setSelectedKey('')
     }
   }
 
@@ -2292,7 +2296,7 @@ export default function App() {
                       ) : editingDevice ? (
                         <Button
                           onClick={handleSaveEditedDevice}
-                          disabled={!deviceName.trim() || (authType === 'agent' ? false : authType === 'password' ? !password : !selectedKey || selectedKey === '__other__')}
+                          disabled={!deviceName.trim() || (authType === 'agent' ? false : authType === 'password' ? !password : !selectedKey)}
                         >
                           Save
                         </Button>
@@ -2301,13 +2305,13 @@ export default function App() {
                           <Button
                             variant="outline"
                             onClick={() => handleConnect(false)}
-                            disabled={authType === 'agent' ? false : authType === 'password' ? !password : !selectedKey || selectedKey === '__other__'}
+                            disabled={authType === 'agent' ? false : authType === 'password' ? !password : !selectedKey}
                           >
                             Connect
                           </Button>
                           <Button
                             onClick={() => handleConnect(true)}
-                            disabled={authType === 'agent' ? false : authType === 'password' ? !password : !selectedKey || selectedKey === '__other__'}
+                            disabled={authType === 'agent' ? false : authType === 'password' ? !password : !selectedKey}
                           >
                             Save and Connect
                           </Button>
