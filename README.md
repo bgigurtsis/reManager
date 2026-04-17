@@ -118,3 +118,8 @@ Requires Go 1.23+ and Node.js.
 ```bash
 wails build
 ```
+
+## License
+Copyright (C) 2026 Mitchell Scott
+
+Licensed under the GNU General Public License v3.0.
