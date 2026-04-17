@@ -1136,6 +1136,7 @@ export default function App() {
       debugLog('Received vellum:uninstall-complete')
       setVellumUninstalling(false)
       setVellumInstalled(false)
+      setInstalledPackages(new Map())
       setShowSettingsDialog(false)
       setVellumUninstallSuccess(true)
     })
