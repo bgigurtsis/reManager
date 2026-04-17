@@ -120,6 +120,7 @@ interface DialogRequest {
   confirmText: string
   inProgressMessage: string
   infoOnly: boolean
+  installFlow?: boolean
   actions: DialogActionRequest[]
 }
 
@@ -222,8 +223,8 @@ declare global {
           CancelInstallation(): Promise<void>
           GetAppVersion(): Promise<string>
           CheckForAppUpdate(): Promise<{ updateAvailable: boolean; latestVersion: string; currentVersion: string; releaseURL: string; error?: string }>
-          GetSettings(): Promise<{ tabVisibility: Record<string, boolean>; proxyMode: boolean; suppressSystemFileWarnings: boolean; preventSleep: boolean; theme: string; terminalTheme: string; editorTheme: string; checkForUpdates: boolean; sshAgentSocketPath: string }>
-          SaveSettings(tabVisibility: Record<string, boolean>, proxyMode: boolean, suppressSystemFileWarnings: boolean, preventSleep: boolean, theme: string, terminalTheme: string, editorTheme: string, checkForUpdates: boolean, sshAgentSocketPath: string): Promise<void>
+          GetSettings(): Promise<{ tabVisibility: Record<string, boolean>; proxyMode: boolean; suppressSystemFileWarnings: boolean; skipWarningCountdowns: boolean; preventSleep: boolean; theme: string; terminalTheme: string; editorTheme: string; checkForUpdates: boolean; sshAgentSocketPath: string }>
+          SaveSettings(tabVisibility: Record<string, boolean>, proxyMode: boolean, suppressSystemFileWarnings: boolean, skipWarningCountdowns: boolean, preventSleep: boolean, theme: string, terminalTheme: string, editorTheme: string, checkForUpdates: boolean, sshAgentSocketPath: string): Promise<void>
           GetSystemColorScheme(): Promise<string>
           UninstallVellum(removeAllPackages: boolean): Promise<void>
           CleanupBrokenVellum(): Promise<void>
@@ -333,9 +334,12 @@ export default function App() {
   const [currentComponent, setCurrentComponent] = useState('')
   const [progressStatus, setProgressStatus] = useState('')
   const [showRebuildDialog, setShowRebuildDialog] = useState(false)
+  const [showStartUIDialog, setShowStartUIDialog] = useState(false)
   const [dialogRequest, setDialogRequest] = useState<DialogRequest | null>(null)
   const dialogRespondedRef = useRef(false)
   const [runningHookTitle, setRunningHookTitle] = useState<string | null>(null)
+  const [xoviWarningCountdown, setXoviWarningCountdown] = useState(0)
+  const [hashtableWarningCountdown, setHashtableWarningCountdown] = useState(0)
   const connectAttemptRef = useRef(0)
 
   const [activeTab, setActiveTab] = useState<'mods' | 'maintenance' | 'utilities'>('mods')
@@ -386,6 +390,7 @@ export default function App() {
   })
   const [proxyMode, setProxyMode] = useState(true)
   const [suppressSystemFileWarnings, setSuppressSystemFileWarnings] = useState(false)
+  const [skipWarningCountdowns, setSkipWarningCountdowns] = useState(false)
   const [preventSleep, setPreventSleep] = useState(true)
   const [theme, setTheme] = useState('system')
   const [terminalTheme, setTerminalTheme] = useState('match')
@@ -618,6 +623,7 @@ export default function App() {
         setTabVisibility(settings?.tabVisibility || { mods: true, maintenance: true, utilities: true })
         setProxyMode(settings?.proxyMode ?? true)
         setSuppressSystemFileWarnings(settings?.suppressSystemFileWarnings ?? false)
+        setSkipWarningCountdowns(settings?.skipWarningCountdowns ?? false)
         setPreventSleep(settings?.preventSleep ?? true)
         const loadedTheme = settings?.theme || 'system'
         setTheme(loadedTheme)
@@ -1460,6 +1466,40 @@ export default function App() {
   }, [])
 
   useEffect(() => {
+    const active = pendingXoviInfo !== null && !installing && !uninstalling
+    if (!active || skipWarningCountdowns) {
+      setXoviWarningCountdown(0)
+      return
+    }
+    setXoviWarningCountdown(5)
+    const interval = setInterval(() => {
+      setXoviWarningCountdown((c) => (c > 1 ? c - 1 : 0))
+    }, 1000)
+    return () => clearInterval(interval)
+  }, [pendingXoviInfo !== null, installing, uninstalling, skipWarningCountdowns])
+
+  useEffect(() => {
+    const active = showRebuildDialog
+      && !!dialogRequest
+      && dialogRequest.installFlow === true
+      && !dialogRequest.infoOnly
+      && !(dialogRequest.actions && dialogRequest.actions.length > 0 && !dialogRequest.confirmText)
+    if (!active) {
+      setHashtableWarningCountdown(0)
+      return
+    }
+    if (skipWarningCountdowns) {
+      setHashtableWarningCountdown(0)
+      return
+    }
+    setHashtableWarningCountdown(5)
+    const interval = setInterval(() => {
+      setHashtableWarningCountdown((c) => (c > 1 ? c - 1 : 0))
+    }, 1000)
+    return () => clearInterval(interval)
+  }, [showRebuildDialog, dialogRequest, skipWarningCountdowns])
+
+  useEffect(() => {
     if (osMismatchDetected && !compatibilityStatus) {
       debugLog('useEffect: osMismatchDetected=true, compatibilityStatus=null — fetching compatibility')
       setChecklistLoading(true)
@@ -1594,11 +1634,12 @@ export default function App() {
     setShowFilesystemRestoreError(false)
   }
 
-  const handleSaveSettings = async (newTabVisibility: Record<string, boolean>, newProxyMode: boolean, newSuppressSystemFileWarnings: boolean, newPreventSleep: boolean, newTheme: string, newTerminalTheme: string, newEditorTheme: string, newCheckForUpdates: boolean, newSSHAgentSocketPath: string) => {
+  const handleSaveSettings = async (newTabVisibility: Record<string, boolean>, newProxyMode: boolean, newSuppressSystemFileWarnings: boolean, newSkipWarningCountdowns: boolean, newPreventSleep: boolean, newTheme: string, newTerminalTheme: string, newEditorTheme: string, newCheckForUpdates: boolean, newSSHAgentSocketPath: string) => {
     const wasCheckForUpdatesOff = !checkForUpdates
     setTabVisibility(newTabVisibility)
     setProxyMode(newProxyMode)
     setSuppressSystemFileWarnings(newSuppressSystemFileWarnings)
+    setSkipWarningCountdowns(newSkipWarningCountdowns)
     setPreventSleep(newPreventSleep)
     setTheme(newTheme)
     localStorage.setItem('theme', newTheme)
@@ -1607,7 +1648,7 @@ export default function App() {
     setEditorTheme(newEditorTheme)
     setCheckForUpdates(newCheckForUpdates)
     setSSHAgentSocketPath(newSSHAgentSocketPath)
-    await window.go.main.App.SaveSettings(newTabVisibility, newProxyMode, newSuppressSystemFileWarnings, newPreventSleep, newTheme, newTerminalTheme, newEditorTheme, newCheckForUpdates, newSSHAgentSocketPath)
+    await window.go.main.App.SaveSettings(newTabVisibility, newProxyMode, newSuppressSystemFileWarnings, newSkipWarningCountdowns, newPreventSleep, newTheme, newTerminalTheme, newEditorTheme, newCheckForUpdates, newSSHAgentSocketPath)
 
     const agentAvail = await window.go.main.App.IsSSHAgentAvailable().catch(() => false)
     setSSHAgentAvailable(!!agentAvail)
@@ -1630,7 +1671,7 @@ export default function App() {
 
   const handleEnableProxyModeFromModal = async () => {
     setProxyMode(true)
-    await window.go.main.App.SaveSettings(tabVisibility, true, suppressSystemFileWarnings, preventSleep, theme, terminalTheme, editorTheme, checkForUpdates, sshAgentSocketPath)
+    await window.go.main.App.SaveSettings(tabVisibility, true, suppressSystemFileWarnings, skipWarningCountdowns, preventSleep, theme, terminalTheme, editorTheme, checkForUpdates, sshAgentSocketPath)
     setShowDnsErrorModal(false)
   }
 
@@ -2027,9 +2068,9 @@ export default function App() {
             <p className="text-muted-foreground">Manage packages on your reMarkable</p>
           </div>
           <div className="flex items-center gap-2 text-sm">
-            {device && (
+            {device && deviceInfo.firmware && (
               <span className="text-muted-foreground">
-                {getDisplayName(deviceInfo.machine || device)} ({deviceInfo.firmware || 'unknown firmware'})
+                {getDisplayName(deviceInfo.machine || device)} ({deviceInfo.firmware})
               </span>
             )}
             <Tooltip>
@@ -2362,9 +2403,15 @@ export default function App() {
                 The xochitl UI service is not running on the reMarkable.
               </AlertDescription>
               <AlertAction className="top-1/2 -translate-y-1/2">
-                <Button size="sm" variant="destructive" onClick={() => handleSystemTask('restart-xochitl')}>
-                  Start
-                </Button>
+                {installedPackages.has('xovi') ? (
+                  <Button size="sm" onClick={() => setShowStartUIDialog(true)}>
+                    Fix
+                  </Button>
+                ) : (
+                  <Button size="sm" onClick={() => handleSystemTask('restart-xochitl')}>
+                    Start
+                  </Button>
+                )}
               </AlertAction>
             </Alert>
           </div>
@@ -3485,7 +3532,8 @@ export default function App() {
                 </DialogTitle>
                 <DialogDescription>
                   <div className="space-y-4 pt-4">
-                    <p>For technical reasons, UI mods do not auto-start after reboots. Each time your device restarts, you will need to manually start them using one of the following methods:</p>
+                    <p>UI mods do not auto-start after reboot by design. Attempting to force auto-start can prevent your device from booting properly.</p>
+                    <p>Each time your device restarts, you'll need to manually start them using one of the following methods:</p>
                     <ul className="space-y-2 text-sm">
                       <li className="flex items-start gap-2.5">
                         <span className="flex-shrink-0 w-5 h-5 rounded-full bg-muted text-muted-foreground text-xs font-semibold flex items-center justify-center">1</span>
@@ -3536,13 +3584,14 @@ export default function App() {
 
               <DialogFooter>
                 <Button
+                  disabled={xoviWarningCountdown > 0}
                   onClick={() => {
                     const pkgs = pendingXoviInfo
                     setPendingXoviInfo(null)
                     handleInstallQueue(pkgs)
                   }}
                 >
-                  Continue
+                  {xoviWarningCountdown > 0 ? `Continue (${xoviWarningCountdown}s)` : 'Continue'}
                 </Button>
               </DialogFooter>
             </>
@@ -3758,6 +3807,7 @@ export default function App() {
                       Cancel
                     </Button>
                     <Button
+                      disabled={hashtableWarningCountdown > 0}
                       onClick={() => {
                         dialogRespondedRef.current = true
                         setShowRebuildDialog(false)
@@ -3765,13 +3815,65 @@ export default function App() {
                                       window.go.main.App.RespondToDialog('confirm')
                       }}
                     >
-                      {dialogRequest?.confirmText || 'Proceed'}
+                      {hashtableWarningCountdown > 0
+                        ? `${dialogRequest?.confirmText || 'Proceed'} (${hashtableWarningCountdown}s)`
+                        : (dialogRequest?.confirmText || 'Proceed')}
                     </Button>
                   </>
                 )}
               </DialogFooter>
             </>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Start UI Chooser Dialog (shown when xochitl isn't running and xovi is installed) */}
+      <Dialog open={showStartUIDialog} onOpenChange={setShowStartUIDialog}>
+        <DialogContent className="relative">
+          <Button
+            variant="ghost"
+            size="xs"
+            className="absolute right-2 top-2"
+            onClick={() => setShowStartUIDialog(false)}
+          >
+            <X className="h-3 w-3" />
+          </Button>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertCircle className="h-5 w-5 text-yellow-500" />
+              reMarkable UI stopped
+            </DialogTitle>
+            <DialogDescription>
+              The tablet interface is currently stopped. How would you like to start it?
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-2 pt-2">
+            <Button
+              className="w-full justify-center gap-2"
+              disabled={!!hashtabMismatch}
+              onClick={() => {
+                setShowStartUIDialog(false)
+                handleSystemTask('start-xochitl-xovi')
+              }}
+            >
+              Start UI with Mods
+            </Button>
+            {hashtabMismatch && (
+              <p className="text-xs text-muted-foreground text-center -mt-1">
+                Disabled due to hashtable mismatch
+              </p>
+            )}
+            <Button
+              variant="outline"
+              className="w-full justify-center gap-2"
+              onClick={() => {
+                setShowStartUIDialog(false)
+                handleSystemTask('restart-xochitl')
+              }}
+            >
+              Start UI without Mods
+            </Button>
+          </div>
         </DialogContent>
       </Dialog>
 
@@ -3885,6 +3987,7 @@ export default function App() {
         tabVisibility={tabVisibility}
         proxyMode={proxyMode}
         suppressSystemFileWarnings={suppressSystemFileWarnings}
+        skipWarningCountdowns={skipWarningCountdowns}
         preventSleep={preventSleep}
         theme={theme}
         terminalTheme={terminalTheme}
@@ -3958,9 +4061,9 @@ export default function App() {
                   <p className="text-muted-foreground">Manage packages on your reMarkable</p>
                 </div>
                 <div className="flex items-center gap-2 text-sm">
-                  {device && (
+                  {device && deviceInfo.firmware && (
                     <span className="text-muted-foreground">
-                      {getDisplayName(deviceInfo.machine || device)} ({deviceInfo.firmware || 'unknown firmware'})
+                      {getDisplayName(deviceInfo.machine || device)} ({deviceInfo.firmware})
                     </span>
                   )}
                   <Tooltip>
@@ -4011,9 +4114,9 @@ export default function App() {
                   <p className="text-muted-foreground">Manage packages on your reMarkable</p>
                 </div>
                 <div className="flex items-center gap-2 text-sm">
-                  {device && (
+                  {device && deviceInfo.firmware && (
                     <span className="text-muted-foreground">
-                      {getDisplayName(deviceInfo.machine || device)} ({deviceInfo.firmware || 'unknown firmware'})
+                      {getDisplayName(deviceInfo.machine || device)} ({deviceInfo.firmware})
                     </span>
                   )}
                   <Tooltip>

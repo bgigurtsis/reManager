@@ -42,6 +42,7 @@ type DialogConfig struct {
 	ConfirmText       string
 	InProgressMessage string
 	InfoOnly          bool
+	InstallFlow       bool
 	Actions           []DialogAction
 	PostCommandDialog *DialogConfig
 }

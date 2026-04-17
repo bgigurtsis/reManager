@@ -2490,6 +2490,7 @@ type DialogRequest struct {
 	ConfirmText       string                `json:"confirmText"`
 	InProgressMessage string                `json:"inProgressMessage"`
 	InfoOnly          bool                  `json:"infoOnly"`
+	InstallFlow       bool                  `json:"installFlow"`
 	Actions           []DialogActionRequest `json:"actions"`
 }
 
@@ -2511,6 +2512,7 @@ func dialogRequestFromConfig(cfg *component.DialogConfig) DialogRequest {
 		ConfirmText:       cfg.ConfirmText,
 		InProgressMessage: cfg.InProgressMessage,
 		InfoOnly:          cfg.InfoOnly,
+		InstallFlow:       cfg.InstallFlow,
 		Actions:           actions,
 	}
 }
@@ -3404,6 +3406,7 @@ func isNewerVersion(current, latest string) bool {
 type BehaviorSettings struct {
 	ProxyMode                  bool `json:"proxyMode"`
 	SuppressSystemFileWarnings bool `json:"suppressSystemFileWarnings"`
+	SkipWarningCountdowns      bool `json:"skipWarningCountdowns"`
 	PreventSleep               bool `json:"preventSleep"`
 	CheckForUpdates            bool `json:"checkForUpdates"`
 }
@@ -3424,6 +3427,7 @@ func (a *App) GetSettings() SettingsInfo {
 			BehaviorSettings: BehaviorSettings{
 				ProxyMode:                  true,
 				SuppressSystemFileWarnings: false,
+				SkipWarningCountdowns:      false,
 				PreventSleep:               true,
 				CheckForUpdates:            true,
 			},
@@ -3440,6 +3444,7 @@ func (a *App) GetSettings() SettingsInfo {
 			BehaviorSettings: BehaviorSettings{
 				ProxyMode:                  true,
 				SuppressSystemFileWarnings: false,
+				SkipWarningCountdowns:      false,
 				PreventSleep:               true,
 				CheckForUpdates:            true,
 			},
@@ -3454,6 +3459,7 @@ func (a *App) GetSettings() SettingsInfo {
 		BehaviorSettings: BehaviorSettings{
 			ProxyMode:                  settings.ProxyMode,
 			SuppressSystemFileWarnings: settings.SuppressSystemFileWarnings,
+			SkipWarningCountdowns:      settings.SkipWarningCountdowns,
 			PreventSleep:               settings.PreventSleep,
 			CheckForUpdates:            settings.CheckForUpdates,
 		},
@@ -3465,7 +3471,7 @@ func (a *App) GetSettings() SettingsInfo {
 	}
 }
 
-func (a *App) SaveSettings(tabVisibility map[string]bool, proxyMode bool, suppressSystemFileWarnings bool, preventSleep bool, theme string, terminalTheme string, editorTheme string, checkForUpdates bool, sshAgentSocketPath string) error {
+func (a *App) SaveSettings(tabVisibility map[string]bool, proxyMode bool, suppressSystemFileWarnings bool, skipWarningCountdowns bool, preventSleep bool, theme string, terminalTheme string, editorTheme string, checkForUpdates bool, sshAgentSocketPath string) error {
 	debug.Printf("[DEBUG] SaveSettings: preventSleep=%v, isConnected=%v\n", preventSleep, a.IsConnected())
 	if a.settingsStore == nil {
 		return fmt.Errorf("settings store not initialized")
@@ -3474,6 +3480,7 @@ func (a *App) SaveSettings(tabVisibility map[string]bool, proxyMode bool, suppre
 		TabVisibility:              storage.TabVisibility(tabVisibility),
 		ProxyMode:                  proxyMode,
 		SuppressSystemFileWarnings: suppressSystemFileWarnings,
+		SkipWarningCountdowns:      skipWarningCountdowns,
 		PreventSleep:               preventSleep,
 		Theme:                      theme,
 		TerminalTheme:              terminalTheme,
