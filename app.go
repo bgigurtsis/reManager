@@ -865,9 +865,9 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 			warnings["autoUpdateEnabled"] = updateStatus
 		}
 
-		xochitlRunning := a.GetXochitlStatus()
-		debug.Printf("[DEBUG] Xochitl check: running=%v\n", xochitlRunning)
-		if !xochitlRunning {
+		xochitlStatus := a.GetXochitlStatus()
+		debug.Printf("[DEBUG] Xochitl check: running=%v\n", xochitlStatus.Running)
+		if !xochitlStatus.Running {
 			warnings["xochitlNotRunning"] = true
 		}
 
@@ -1681,19 +1681,26 @@ func (a *App) GetUpdateServiceStatus() UpdateServiceStatus {
 	return status
 }
 
-func (a *App) GetXochitlStatus() bool {
+type XochitlStatus struct {
+	Running    bool `json:"running"`
+	XoviActive bool `json:"xoviActive"`
+}
+
+func (a *App) GetXochitlStatus() XochitlStatus {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
 	if a.client == nil {
-		return false
+		return XochitlStatus{}
 	}
 
 	output, err := a.runCommand("systemctl is-active xochitl")
-	if err != nil {
-		return false
-	}
-	return strings.TrimSpace(output) == "active"
+	running := err == nil && strings.TrimSpace(output) == "active"
+
+	_, err = a.runCommand("test -f /etc/systemd/system/xochitl.service.d/00-xovi.conf")
+	xoviActive := err == nil
+
+	return XochitlStatus{Running: running, XoviActive: xoviActive}
 }
 
 type HashtabVersionStatus struct {
@@ -2488,6 +2495,7 @@ type DialogRequest struct {
 	Note              string                `json:"note"`
 	Steps             []string              `json:"steps"`
 	ConfirmText       string                `json:"confirmText"`
+	CancelText        string                `json:"cancelText"`
 	InProgressMessage string                `json:"inProgressMessage"`
 	InfoOnly          bool                  `json:"infoOnly"`
 	InstallFlow       bool                  `json:"installFlow"`
@@ -2510,6 +2518,7 @@ func dialogRequestFromConfig(cfg *component.DialogConfig) DialogRequest {
 		Note:              cfg.Note,
 		Steps:             cfg.Steps,
 		ConfirmText:       cfg.ConfirmText,
+		CancelText:        cfg.CancelText,
 		InProgressMessage: cfg.InProgressMessage,
 		InfoOnly:          cfg.InfoOnly,
 		InstallFlow:       cfg.InstallFlow,
@@ -3406,7 +3415,6 @@ func isNewerVersion(current, latest string) bool {
 type BehaviorSettings struct {
 	ProxyMode                  bool `json:"proxyMode"`
 	SuppressSystemFileWarnings bool `json:"suppressSystemFileWarnings"`
-	SkipWarningCountdowns      bool `json:"skipWarningCountdowns"`
 	PreventSleep               bool `json:"preventSleep"`
 	CheckForUpdates            bool `json:"checkForUpdates"`
 }
@@ -3427,7 +3435,7 @@ func (a *App) GetSettings() SettingsInfo {
 			BehaviorSettings: BehaviorSettings{
 				ProxyMode:                  true,
 				SuppressSystemFileWarnings: false,
-				SkipWarningCountdowns:      false,
+
 				PreventSleep:               true,
 				CheckForUpdates:            true,
 			},
@@ -3444,7 +3452,7 @@ func (a *App) GetSettings() SettingsInfo {
 			BehaviorSettings: BehaviorSettings{
 				ProxyMode:                  true,
 				SuppressSystemFileWarnings: false,
-				SkipWarningCountdowns:      false,
+
 				PreventSleep:               true,
 				CheckForUpdates:            true,
 			},
@@ -3459,7 +3467,6 @@ func (a *App) GetSettings() SettingsInfo {
 		BehaviorSettings: BehaviorSettings{
 			ProxyMode:                  settings.ProxyMode,
 			SuppressSystemFileWarnings: settings.SuppressSystemFileWarnings,
-			SkipWarningCountdowns:      settings.SkipWarningCountdowns,
 			PreventSleep:               settings.PreventSleep,
 			CheckForUpdates:            settings.CheckForUpdates,
 		},
@@ -3471,7 +3478,7 @@ func (a *App) GetSettings() SettingsInfo {
 	}
 }
 
-func (a *App) SaveSettings(tabVisibility map[string]bool, proxyMode bool, suppressSystemFileWarnings bool, skipWarningCountdowns bool, preventSleep bool, theme string, terminalTheme string, editorTheme string, checkForUpdates bool, sshAgentSocketPath string) error {
+func (a *App) SaveSettings(tabVisibility map[string]bool, proxyMode bool, suppressSystemFileWarnings bool, preventSleep bool, theme string, terminalTheme string, editorTheme string, checkForUpdates bool, sshAgentSocketPath string) error {
 	debug.Printf("[DEBUG] SaveSettings: preventSleep=%v, isConnected=%v\n", preventSleep, a.IsConnected())
 	if a.settingsStore == nil {
 		return fmt.Errorf("settings store not initialized")
@@ -3480,7 +3487,6 @@ func (a *App) SaveSettings(tabVisibility map[string]bool, proxyMode bool, suppre
 		TabVisibility:              storage.TabVisibility(tabVisibility),
 		ProxyMode:                  proxyMode,
 		SuppressSystemFileWarnings: suppressSystemFileWarnings,
-		SkipWarningCountdowns:      skipWarningCountdowns,
 		PreventSleep:               preventSleep,
 		Theme:                      theme,
 		TerminalTheme:              terminalTheme,

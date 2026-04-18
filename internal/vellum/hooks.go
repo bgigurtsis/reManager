@@ -15,19 +15,15 @@ func GetHook(name string) HookFunc {
 func RebuildHashtableDialog(ctx component.CommandContext) (*component.HookExecutionResult, error) {
 	return &component.HookExecutionResult{
 		DialogConfig: &component.DialogConfig{
-			Title:   "Rebuild Hashtable",
-			Message: "This process will restart the tablet interface and may take up to 2 minutes.",
-			Note:    "You will need to rebuild the hashtable again after every OS upgrade.",
-			Steps: []string{
-				"Restart the tablet interface",
-				"Ask for your passcode (if you have one set)",
-				"Generate hashtable (~1 minute)",
-			},
-			ConfirmText:       "Proceed",
-			InProgressMessage: "Please enter your passcode on the tablet if prompted",
+			Title:             "Rebuild Hashtable",
+			Message:           "The hashtable is a map mods use to identify interface components. It's separate from system files and required for UI mods.\n\nBuilding takes about a minute and your reMarkable's interface will restart.",
+			Note:              "You'll need to rebuild after each OS update.\nYou can rebuild the hashtable from the Maintenance tab.",
+			ConfirmText:       "Rebuild",
+			CancelText:        "Cancel",
+			InProgressMessage: "If you have a passcode, enter it on your reMarkable.",
 			PostCommandDialog: &component.DialogConfig{
 				Title:   "Setup Complete",
-				Message: "The hashtable has been rebuilt. The tablet interface is currently stopped. How would you like to start it?",
+				Message: "The hashtable has been rebuilt. The reMarkable interface is currently stopped. How would you like to start it?",
 				Actions: []component.DialogAction{
 					{
 						Id:    "start_with_mods",

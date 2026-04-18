@@ -66,21 +66,6 @@ var SystemTasks = []SystemTask{
 		RequiresTerminal:   true,
 		NeedsWriteableRoot: false,
 	},
-	{
-		ID:          "start-xochitl-xovi",
-		Label:       "Start reMarkable UI with Mods",
-		Description: "Start Xochitl via xovi's start script",
-		Command: func(ctx component.CommandContext) []component.CommandResult {
-			return []component.CommandResult{
-				{
-					Script:      "/home/root/xovi/start",
-					Description: "Start Xochitl with xovi",
-				},
-			}
-		},
-		RequiresTerminal:   true,
-		NeedsWriteableRoot: false,
-	},
 }
 
 func GetSystemTask(id string) *SystemTask {

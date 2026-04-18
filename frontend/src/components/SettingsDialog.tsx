@@ -20,14 +20,13 @@ interface SettingsDialogProps {
   tabVisibility: Record<string, boolean>
   proxyMode: boolean
   suppressSystemFileWarnings: boolean
-  skipWarningCountdowns: boolean
   preventSleep: boolean
   theme: string
   terminalTheme: string
   editorTheme: string
   checkForUpdates: boolean
   sshAgentSocketPath: string
-  onSaveSettings: (tabVisibility: Record<string, boolean>, proxyMode: boolean, suppressSystemFileWarnings: boolean, skipWarningCountdowns: boolean, preventSleep: boolean, theme: string, terminalTheme: string, editorTheme: string, checkForUpdates: boolean, sshAgentSocketPath: string) => void
+  onSaveSettings: (tabVisibility: Record<string, boolean>, proxyMode: boolean, suppressSystemFileWarnings: boolean, preventSleep: boolean, theme: string, terminalTheme: string, editorTheme: string, checkForUpdates: boolean, sshAgentSocketPath: string) => void
   onUninstallVellum: (removeAllPackages: boolean) => void
   uninstalling: boolean
   uninstallOutput: string
@@ -43,7 +42,6 @@ export function SettingsDialog({
   tabVisibility,
   proxyMode,
   suppressSystemFileWarnings,
-  skipWarningCountdowns,
   preventSleep,
   theme,
   terminalTheme,
@@ -62,7 +60,6 @@ export function SettingsDialog({
   const [localTabVisibility, setLocalTabVisibility] = useState({ ...defaultTabVisibility, ...tabVisibility })
   const [localProxyMode, setLocalProxyMode] = useState(proxyMode)
   const [localSuppressSystemFileWarnings, setLocalSuppressSystemFileWarnings] = useState(suppressSystemFileWarnings)
-  const [localSkipWarningCountdowns, setLocalSkipWarningCountdowns] = useState(skipWarningCountdowns)
   const [localPreventSleep, setLocalPreventSleep] = useState(preventSleep)
   const [localTheme, setLocalTheme] = useState(theme)
   const [localTerminalTheme, setLocalTerminalTheme] = useState(terminalTheme)
@@ -78,7 +75,6 @@ export function SettingsDialog({
   const hasChanges =
     localProxyMode !== proxyMode ||
     localSuppressSystemFileWarnings !== suppressSystemFileWarnings ||
-    localSkipWarningCountdowns !== skipWarningCountdowns ||
     localPreventSleep !== preventSleep ||
     localTheme !== theme ||
     localTerminalTheme !== terminalTheme ||
@@ -92,7 +88,6 @@ export function SettingsDialog({
       setLocalTabVisibility({ ...defaultTabVisibility, ...tabVisibility })
       setLocalProxyMode(proxyMode)
       setLocalSuppressSystemFileWarnings(suppressSystemFileWarnings)
-      setLocalSkipWarningCountdowns(skipWarningCountdowns)
       setLocalPreventSleep(preventSleep)
       setLocalTheme(theme)
       setLocalTerminalTheme(terminalTheme)
@@ -101,13 +96,12 @@ export function SettingsDialog({
       setLocalSSHAgentSocketPath(sshAgentSocketPath)
       setAgentSocketMode(sshAgentSocketPath ? 'custom' : 'auto')
     }
-  }, [open, tabVisibility, proxyMode, suppressSystemFileWarnings, skipWarningCountdowns, preventSleep, theme, terminalTheme, editorTheme, checkForUpdates, sshAgentSocketPath])
+  }, [open, tabVisibility, proxyMode, suppressSystemFileWarnings, preventSleep, theme, terminalTheme, editorTheme, checkForUpdates, sshAgentSocketPath])
 
   const handleCancel = () => {
     setLocalTabVisibility({ ...defaultTabVisibility, ...tabVisibility })
     setLocalProxyMode(proxyMode)
     setLocalSuppressSystemFileWarnings(suppressSystemFileWarnings)
-    setLocalSkipWarningCountdowns(skipWarningCountdowns)
     setLocalPreventSleep(preventSleep)
     setLocalTheme(theme)
     setLocalTerminalTheme(terminalTheme)
@@ -121,7 +115,7 @@ export function SettingsDialog({
   }
 
   const handleSave = () => {
-    onSaveSettings(localTabVisibility, localProxyMode, localSuppressSystemFileWarnings, localSkipWarningCountdowns, localPreventSleep, localTheme, localTerminalTheme, localEditorTheme, localCheckForUpdates, localSSHAgentSocketPath)
+    onSaveSettings(localTabVisibility, localProxyMode, localSuppressSystemFileWarnings, localPreventSleep, localTheme, localTerminalTheme, localEditorTheme, localCheckForUpdates, localSSHAgentSocketPath)
     onOpenChange(false)
   }
 
@@ -145,7 +139,6 @@ export function SettingsDialog({
       setLocalTabVisibility({ ...defaultTabVisibility, ...tabVisibility })
       setLocalProxyMode(proxyMode)
       setLocalSuppressSystemFileWarnings(suppressSystemFileWarnings)
-      setLocalSkipWarningCountdowns(skipWarningCountdowns)
       setLocalPreventSleep(preventSleep)
       setLocalTheme(theme)
       setLocalTerminalTheme(terminalTheme)
@@ -294,20 +287,6 @@ export function SettingsDialog({
                   id="suppress-sys-warnings"
                   checked={localSuppressSystemFileWarnings}
                   onCheckedChange={setLocalSuppressSystemFileWarnings}
-                />
-              </div>
-              <div className="flex items-center justify-between gap-4">
-                <div>
-                  <Label htmlFor="skip-warning-countdowns" className="font-normal">Skip Warning Countdowns</Label>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Bypass read-time delays on install warnings.
-                    Only enable if you have read and understood these warnings before.
-                  </p>
-                </div>
-                <Switch
-                  id="skip-warning-countdowns"
-                  checked={localSkipWarningCountdowns}
-                  onCheckedChange={setLocalSkipWarningCountdowns}
                 />
               </div>
             </CardContent>

@@ -142,6 +142,9 @@ func (i *Installer) Install(
 				}
 				if hookResult != nil && hookResult.DialogConfig != nil {
 					hookResult.DialogConfig.InstallFlow = true
+					hookResult.DialogConfig.Title = "Build Hashtable"
+					hookResult.DialogConfig.ConfirmText = "Build"
+					hookResult.DialogConfig.CancelText = "Later"
 				}
 				if hookResult != nil && onHook != nil {
 					if err := onHook(hookResult); err != nil {

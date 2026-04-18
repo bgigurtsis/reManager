@@ -40,6 +40,7 @@ type DialogConfig struct {
 	Note              string
 	Steps             []string
 	ConfirmText       string
+	CancelText        string
 	InProgressMessage string
 	InfoOnly          bool
 	InstallFlow       bool

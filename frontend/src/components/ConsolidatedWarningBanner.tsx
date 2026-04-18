@@ -9,6 +9,7 @@ interface ConsolidatedWarningBannerProps {
     osUpgrade?: { prevVersion: string; newVersion: string }
     autoUpdatesEnabled?: boolean
     reenableNeeded?: boolean
+    xoviNotRunning?: boolean
   }
   onGoToMaintenance: () => void
   onDismiss: () => void
@@ -19,7 +20,7 @@ export function ConsolidatedWarningBanner({
   onGoToMaintenance,
   onDismiss,
 }: ConsolidatedWarningBannerProps) {
-  const hasWarnings = warnings.osUpgrade || warnings.hashtabMismatch || warnings.timezoneMismatch || warnings.autoUpdatesEnabled || warnings.reenableNeeded
+  const hasWarnings = warnings.osUpgrade || warnings.hashtabMismatch || warnings.timezoneMismatch || warnings.autoUpdatesEnabled || warnings.reenableNeeded || warnings.xoviNotRunning
 
   if (!hasWarnings) return null
 
@@ -43,6 +44,9 @@ export function ConsolidatedWarningBanner({
           )}
           {warnings.reenableNeeded && (
             <li>Reenable is needed to restore packages that modify the system partition</li>
+          )}
+          {warnings.xoviNotRunning && (
+            <li>Mods are installed but not running. Start UI with Mods from the Maintenance tab.</li>
           )}
         </ul>
       </AlertDescription>
