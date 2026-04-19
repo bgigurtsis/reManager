@@ -10,6 +10,7 @@ interface ConsolidatedWarningBannerProps {
     autoUpdatesEnabled?: boolean
     reenableNeeded?: boolean
     xoviNotRunning?: boolean
+    hashtabMissing?: boolean
   }
   onGoToMaintenance: () => void
   onDismiss: () => void
@@ -20,7 +21,7 @@ export function ConsolidatedWarningBanner({
   onGoToMaintenance,
   onDismiss,
 }: ConsolidatedWarningBannerProps) {
-  const hasWarnings = warnings.osUpgrade || warnings.hashtabMismatch || warnings.timezoneMismatch || warnings.autoUpdatesEnabled || warnings.reenableNeeded || warnings.xoviNotRunning
+  const hasWarnings = warnings.osUpgrade || warnings.hashtabMismatch || warnings.timezoneMismatch || warnings.autoUpdatesEnabled || warnings.reenableNeeded || warnings.xoviNotRunning || warnings.hashtabMissing
 
   if (!hasWarnings) return null
 
@@ -32,6 +33,9 @@ export function ConsolidatedWarningBanner({
         <ul className="space-y-1 list-disc pl-4">
           {warnings.osUpgrade && (
             <li>OS change detected ({warnings.osUpgrade.prevVersion} → {warnings.osUpgrade.newVersion}). Run reenable to restore mods.</li>
+          )}
+          {warnings.hashtabMissing && (
+            <li>Hashtable has not been built. Build it from the Maintenance tab to enable UI mods.</li>
           )}
           {warnings.hashtabMismatch && (
             <li>Hashtable built for OS {warnings.hashtabMismatch.hashtabVersion}, but device is running {warnings.hashtabMismatch.firmwareVersion}</li>

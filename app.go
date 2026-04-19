@@ -858,6 +858,13 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 		if hashtabStatus.NeedsRebuild {
 			warnings["hashtabMismatch"] = hashtabStatus
 		}
+		if !hashtabStatus.Installed && vellumReady {
+			if versions, err := a.vellumClient.ListInstalledWithVersions(); err == nil {
+				if _, hasQRB := versions["qt-resource-rebuilder"]; hasQRB {
+					warnings["hashtabMissing"] = true
+				}
+			}
+		}
 
 		updateStatus := a.GetUpdateServiceStatus()
 		debug.Printf("[DEBUG] Auto-update check: enabled=%v, running=%v\n", updateStatus.Enabled, updateStatus.Running)
@@ -3066,6 +3073,39 @@ func (a *App) RunMaintenanceCommand(pkgName, commandID, deviceType string) {
 						runtime.EventsEmit(a.ctx, "command:done", false)
 						return
 					}
+
+					runtime.EventsEmit(a.ctx, "hook:started", map[string]string{
+						"title": hookResult.DialogConfig.Title,
+					})
+
+					exec := &wailsExecutor{app: a}
+
+					if hookResult.Command != nil {
+						runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("$ %s\n", hookResult.Command.Script))
+						if err := exec.Execute([]component.CommandResult{*hookResult.Command}); err != nil {
+							runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("Error: %v\n", err))
+							runtime.EventsEmit(a.ctx, "command:done", false)
+							return
+						}
+					}
+
+					if hookResult.DialogConfig.PostCommandDialog != nil {
+						runtime.EventsEmit(a.ctx, "hook:dialog", dialogRequestFromConfig(hookResult.DialogConfig.PostCommandDialog))
+
+						postResponse := <-a.dialogResponse
+						for _, action := range hookResult.DialogConfig.PostCommandDialog.Actions {
+							if action.Id == postResponse && action.Type == "run_command" {
+								runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("$ %s\n", action.Value))
+								if err := exec.Execute([]component.CommandResult{{Script: action.Value}}); err != nil {
+									runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("Error: %v\n", err))
+								}
+								break
+							}
+						}
+					}
+
+					runtime.EventsEmit(a.ctx, "command:done", true)
+					return
 				}
 			}
 		}

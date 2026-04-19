@@ -329,7 +329,9 @@ export function SupportBundlePage({ open, onOpenChange, isConnected, savedDevice
 
               {(() => {
                 const activeBundles = bundles.filter(b => !b.expiresAt || b.expiresAt > Date.now() / 1000)
-                const latestBundle = activeBundles[0]
+                const latestBundle = (connectedDeviceId
+                  ? activeBundles.find(b => b.deviceId === connectedDeviceId)
+                  : activeBundles[0]) || activeBundles[0]
                 if (!latestBundle) return null
                 const updatedAt = latestBundle.lastAppended || latestBundle.uploadedAt
                 return (

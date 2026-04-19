@@ -479,6 +479,7 @@ export default function App() {
   } | null>(null)
 
   const [hashtabMismatch, setHashtabMismatch] = useState<HashtabVersionStatus | null>(null)
+  const [hashtabMissing, setHashtabMissing] = useState(false)
 
   const [timezoneMismatch, setTimezoneMismatch] = useState<TimezoneStatus | null>(null)
   const [selectedTimezone, setSelectedTimezone] = useState('')
@@ -973,6 +974,7 @@ export default function App() {
         } else {
           setHashtabMismatch(null)
         }
+        setHashtabMissing(!hashtabStatus.installed && installedPackages.has('qt-resource-rebuilder'))
         if (tzStatus.needsUpdate) {
           setTimezoneMismatch(tzStatus)
         } else {
@@ -1058,6 +1060,7 @@ export default function App() {
       } else {
         setHashtabMismatch(null)
       }
+      setHashtabMissing(!hashtabStatus.installed && installedPackages.has('qt-resource-rebuilder'))
 
       const xochitlStatus = await window.go.main.App.GetXochitlStatus()
       setXochitlRunning(xochitlStatus.running)
@@ -1181,6 +1184,7 @@ export default function App() {
         osMismatch?: { prevVersion: string; newVersion: string }
         reenableStatus?: string
         hashtabMismatch?: HashtabVersionStatus
+        hashtabMissing?: boolean
         autoUpdateEnabled?: { enabled: boolean; running: boolean }
         timezoneStatus?: TimezoneStatus
         timezoneMismatch?: TimezoneStatus
@@ -1208,6 +1212,7 @@ export default function App() {
       } else {
         setHashtabMismatch(null)
       }
+      setHashtabMissing(!!w.hashtabMissing)
       if (w.autoUpdateEnabled) {
         setShowAutoUpdateBanner(true)
       }
@@ -1351,6 +1356,7 @@ export default function App() {
       } else {
         setHashtabMismatch(null)
       }
+      setHashtabMissing(!hashtabStatus.installed && installedPackages.has('qt-resource-rebuilder'))
       if (tzStatus.needsUpdate) {
         setTimezoneMismatch(tzStatus)
       } else {
@@ -2409,12 +2415,14 @@ export default function App() {
                 timezoneMismatch: timezoneMismatch ? { deviceTimezone: timezoneMismatch.deviceTimezone, savedTimezone: timezoneMismatch.savedTimezone } : undefined,
                 autoUpdatesEnabled: showAutoUpdateBanner,
                 reenableNeeded: reenableStatus === 'needed',
-                xoviNotRunning: installedPackages.has('xovi') && xochitlRunning && !xoviActive && !hashtabMismatch,
+                xoviNotRunning: installedPackages.has('xovi') && xochitlRunning && !xoviActive && !hashtabMismatch && !hashtabMissing,
+                hashtabMissing,
               }}
               onGoToMaintenance={() => setActiveTab('maintenance')}
               onDismiss={() => {
                 setOsUpgradeDetected(false)
                 setHashtabMismatch(null)
+                setHashtabMissing(false)
                 setTimezoneMismatch(null)
                 setShowAutoUpdateBanner(false)
                 setReenableStatus('')
@@ -2952,8 +2960,8 @@ export default function App() {
                                   const isHashtabRebuild = pkg.name === 'qt-resource-rebuilder' && cmd.id === 'rebuild_hashtable'
                                   const isXoviStart = pkg.name === 'xovi' && cmd.id === 'start'
                                   const xoviNeedsStart = isXoviStart && xochitlRunning && !xoviActive
-                                  const shouldHighlight = (isHashtabRebuild && hashtabMismatch) || (xoviNeedsStart && !hashtabMismatch)
-                                  const isDisabledByMismatch = isXoviStart && !!hashtabMismatch
+                                  const shouldHighlight = (isHashtabRebuild && (hashtabMismatch || hashtabMissing)) || (xoviNeedsStart && !hashtabMismatch && !hashtabMissing)
+                                  const isDisabledByMismatch = isXoviStart && (!!hashtabMismatch || hashtabMissing)
 
                                   return (
                                     <div key={cmd.id} className="flex gap-2">
@@ -3890,7 +3898,7 @@ export default function App() {
           <div className="flex flex-col gap-2 pt-2">
             <Button
               className="w-full justify-center gap-2"
-              disabled={!!hashtabMismatch}
+              disabled={!!hashtabMismatch || hashtabMissing}
               onClick={() => {
                 setShowStartUIDialog(false)
                 handleComponentMaintenance('xovi', 'start')
@@ -3898,9 +3906,9 @@ export default function App() {
             >
               Start UI with Mods
             </Button>
-            {hashtabMismatch && (
+            {(hashtabMismatch || hashtabMissing) && (
               <p className="text-xs text-muted-foreground text-center -mt-1">
-                Disabled due to hashtable mismatch
+                {hashtabMissing ? 'Disabled — hashtable not built' : 'Disabled due to hashtable mismatch'}
               </p>
             )}
             <Button
