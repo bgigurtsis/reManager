@@ -858,11 +858,15 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 		if hashtabStatus.NeedsRebuild {
 			warnings["hashtabMismatch"] = hashtabStatus
 		}
-		if !hashtabStatus.Installed && vellumReady {
-			if versions, err := a.vellumClient.ListInstalledWithVersions(); err == nil {
-				if _, hasQRB := versions["qt-resource-rebuilder"]; hasQRB {
-					warnings["hashtabMissing"] = true
-				}
+
+		var installedVersions map[string]string
+		if vellumReady {
+			installedVersions, _ = a.vellumClient.ListInstalledWithVersions()
+		}
+
+		if !hashtabStatus.Installed && installedVersions != nil {
+			if _, hasQRB := installedVersions["qt-resource-rebuilder"]; hasQRB {
+				warnings["hashtabMissing"] = true
 			}
 		}
 
@@ -873,9 +877,14 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 		}
 
 		xochitlStatus := a.GetXochitlStatus()
-		debug.Printf("[DEBUG] Xochitl check: running=%v\n", xochitlStatus.Running)
+		debug.Printf("[DEBUG] Xochitl check: running=%v, xoviActive=%v\n", xochitlStatus.Running, xochitlStatus.XoviActive)
 		if !xochitlStatus.Running {
 			warnings["xochitlNotRunning"] = true
+		}
+		if xochitlStatus.Running && !xochitlStatus.XoviActive && !hashtabStatus.NeedsRebuild && hashtabStatus.Installed && installedVersions != nil {
+			if _, hasXovi := installedVersions["xovi"]; hasXovi {
+				warnings["xoviNotRunning"] = true
+			}
 		}
 
 		timezoneStatus := a.GetTimezoneStatus()

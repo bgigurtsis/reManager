@@ -369,6 +369,7 @@ export default function App() {
   const [showAutoUpdateBanner, setShowAutoUpdateBanner] = useState(false)
   const [xochitlRunning, setXochitlRunning] = useState(true)
   const [xoviActive, setXoviActive] = useState(false)
+  const [xoviNotRunning, setXoviNotRunning] = useState(false)
   const [commandContext, setCommandContext] = useState<'install' | 'maintenance' | null>(null)
   const commandContextRef = useRef<'install' | 'maintenance' | null>(null)
   const runningSystemTaskRef = useRef<string | null>(null)
@@ -707,6 +708,8 @@ export default function App() {
     return () => clearInterval(interval)
   }, [connectionStatus, commandRunning])
 
+
+
   useEffect(() => {
     if (activeTab === 'mods' && !tabVisibility.mods) {
       setActiveTab('maintenance')
@@ -737,6 +740,8 @@ export default function App() {
     setUninstallQueue(new Set())
     setOutput('')
     setHashtabMismatch(null)
+    setHashtabMissing(false)
+    setXoviNotRunning(false)
     setOsMismatchDetected(false)
     osMismatchDetectedRef.current = false
     setOsUpgradeDetected(false)
@@ -975,6 +980,7 @@ export default function App() {
           setHashtabMismatch(null)
         }
         setHashtabMissing(!hashtabStatus.installed && installedPackages.has('qt-resource-rebuilder'))
+        setXoviNotRunning(installedPackages.has('xovi') && xochitlStatus.running && !xochitlStatus.xoviActive && !hashtabStatus.needsRebuild && hashtabStatus.installed)
         if (tzStatus.needsUpdate) {
           setTimezoneMismatch(tzStatus)
         } else {
@@ -1065,6 +1071,7 @@ export default function App() {
       const xochitlStatus = await window.go.main.App.GetXochitlStatus()
       setXochitlRunning(xochitlStatus.running)
       setXoviActive(xochitlStatus.xoviActive)
+      setXoviNotRunning(installedPackages.has('xovi') && xochitlStatus.running && !xochitlStatus.xoviActive && !hashtabStatus.needsRebuild && hashtabStatus.installed)
 
       setInstalling(false)
       setUninstalling(false)
@@ -1189,6 +1196,7 @@ export default function App() {
         timezoneStatus?: TimezoneStatus
         timezoneMismatch?: TimezoneStatus
         xochitlNotRunning?: boolean
+        xoviNotRunning?: boolean
       }
       debugLog('Received connect:warnings:', w)
       setWarningsChecked(true)
@@ -1226,6 +1234,7 @@ export default function App() {
         setSelectedTimezone(w.timezoneMismatch.savedTimezone || w.timezoneMismatch.deviceTimezone)
       }
       setXochitlRunning(!w.xochitlNotRunning)
+      setXoviNotRunning(!!w.xoviNotRunning)
     })
 
     const unsubscribeTimezoneComplete = window.runtime.EventsOn('timezone:complete', (...args: unknown[]) => {
@@ -1357,6 +1366,7 @@ export default function App() {
         setHashtabMismatch(null)
       }
       setHashtabMissing(!hashtabStatus.installed && installedPackages.has('qt-resource-rebuilder'))
+      setXoviNotRunning(installedPackages.has('xovi') && xochitlStatus.running && !xochitlStatus.xoviActive && !hashtabStatus.needsRebuild && hashtabStatus.installed)
       if (tzStatus.needsUpdate) {
         setTimezoneMismatch(tzStatus)
       } else {
@@ -2415,7 +2425,7 @@ export default function App() {
                 timezoneMismatch: timezoneMismatch ? { deviceTimezone: timezoneMismatch.deviceTimezone, savedTimezone: timezoneMismatch.savedTimezone } : undefined,
                 autoUpdatesEnabled: showAutoUpdateBanner,
                 reenableNeeded: reenableStatus === 'needed',
-                xoviNotRunning: installedPackages.has('xovi') && xochitlRunning && !xoviActive && !hashtabMismatch && !hashtabMissing,
+                xoviNotRunning,
                 hashtabMissing,
               }}
               onGoToMaintenance={() => setActiveTab('maintenance')}
@@ -2423,6 +2433,7 @@ export default function App() {
                 setOsUpgradeDetected(false)
                 setHashtabMismatch(null)
                 setHashtabMissing(false)
+                setXoviNotRunning(false)
                 setTimezoneMismatch(null)
                 setShowAutoUpdateBanner(false)
                 setReenableStatus('')
