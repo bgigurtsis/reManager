@@ -285,6 +285,7 @@ declare global {
           SetSleepScreen(imagePath: string): Promise<void>
           ResetSleepScreen(): Promise<void>
           RestartXochitl(): Promise<void>
+          RescanLibrary(): Promise<void>
           DeleteAllLogs(): Promise<void>
           GetSupportBundlePreview(): Promise<{ included: string[]; excluded: string[] }>
           GenerateSupportBundle(deviceID: string): void
@@ -3395,6 +3396,7 @@ export default function App() {
       <ImportPDFDialog
         open={showImportPDF}
         isConnected={connectionStatus === 'connected'}
+        hasLibrarian={installedPackages.has('librarian')}
         onOpenChange={setShowImportPDF}
       />
 

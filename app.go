@@ -5787,6 +5787,30 @@ func (a *App) RestartXochitl() error {
 	return nil
 }
 
+
+func (a *App) RescanLibrary() error {
+	a.mu.Lock()
+	client := a.client
+	a.mu.Unlock()
+
+	if client == nil {
+		return fmt.Errorf("not connected")
+	}
+
+	session, err := client.NewSession()
+	if err != nil {
+		return fmt.Errorf("failed to create session: %w", err)
+	}
+	defer session.Close()
+
+	_, err = session.CombinedOutput("echo '>erescanLibrary:' > /run/xovi-mb")
+	if err != nil {
+		return fmt.Errorf("failed to rescan library: %w", err)
+	}
+
+	return nil
+}
+
 // SelectPDFFile opens a native file dialog filtered to PDF files and returns
 // the chosen path, or an empty string if the user cancelled.
 func (a *App) SelectPDFFile() string {
