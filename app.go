@@ -821,12 +821,19 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 	}
 
 	go func() {
+		a.mu.Lock()
+		vc := a.vellumClient
+		a.mu.Unlock()
+		if vc == nil {
+			return
+		}
+
 		if err := a.metadata.Refresh(); err != nil {
 			debug.Printf("[DEBUG] Metadata refresh failed: %v\n", err)
 		}
 
 		debug.Println("[DEBUG] Checking if vellum is installed...")
-		installed, err := a.vellumClient.IsInstalled()
+		installed, err := vc.IsInstalled()
 		debug.Printf("[DEBUG] Vellum installed: %v, err: %v\n", installed, err)
 
 		warnings := map[string]interface{}{}
@@ -836,7 +843,7 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 		if err == nil && !installed {
 			runtime.EventsEmit(a.ctx, "vellum:bootstrap-prompt", nil)
 		} else if err == nil && installed {
-			valid, missing, verr := a.vellumClient.ValidateInstall()
+			valid, missing, verr := vc.ValidateInstall()
 			debug.Printf("[DEBUG] Vellum validation: valid=%v, missing=%v, err=%v\n", valid, missing, verr)
 			runtime.EventsEmit(a.ctx, "vellum:ready", nil)
 			if verr == nil && !valid {
@@ -844,7 +851,7 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 			} else {
 				vellumReady = true
 
-				reenableStatus, reenableErr := a.vellumClient.ReenableStatus()
+				reenableStatus, reenableErr := vc.ReenableStatus()
 				if reenableErr == nil && reenableStatus != "" {
 					debug.Printf("[DEBUG] Reenable status: %s\n", reenableStatus)
 					warnings["reenableStatus"] = reenableStatus
@@ -861,7 +868,7 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 
 		var installedVersions map[string]string
 		if vellumReady {
-			installedVersions, _ = a.vellumClient.ListInstalledWithVersions()
+			installedVersions, _ = vc.ListInstalledWithVersions()
 		}
 
 		if !hashtabStatus.Installed && installedVersions != nil {
@@ -919,16 +926,16 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 				a.mu.Unlock()
 				if sshClient != nil {
 					arch := device.GetArchitecture(component.DeviceType(deviceType))
-					proxy := vellum.NewProxy(a.vellumClient, sshClient, string(arch))
+					proxy := vellum.NewProxy(vc, sshClient, string(arch))
 					_ = proxy.UploadAPKINDEX(func(msg string) {
 						debug.Printf("[DEBUG] Upgrade check APKINDEX: %s\n", msg)
 					})
 				}
 			}
 
-			upgradeResult, simErr := a.vellumClient.SimulateUpgrade()
+			upgradeResult, simErr := vc.SimulateUpgrade()
 
-			osState, err := a.vellumClient.GetOSVersionState()
+			osState, err := vc.GetOSVersionState()
 			debug.Printf("[DEBUG] GetOSVersionState: stored=%q, current=%q, mismatch=%v, err=%v\n", osState.StoredVersion, osState.CurrentVersion, osState.Mismatch, err)
 			if err == nil {
 				osVersionStored = osState.StoredVersion
@@ -970,8 +977,8 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 					cached.MachineType = devInfo["machine"]
 					cached.FirmwareVersion = devInfo["firmware"]
 				}
-				if a.vellumClient != nil {
-					if versions, err := a.vellumClient.ListInstalledWithVersions(); err == nil {
+				if vc != nil {
+					if versions, err := vc.ListInstalledWithVersions(); err == nil {
 						cached.InstalledPackages = versions
 					}
 				}
@@ -2134,22 +2141,22 @@ func (a *App) SimulatePackageUpgrade() (map[string]interface{}, error) {
 }
 
 func (a *App) RunPackageUpgrade() {
-	if a.vellumClient == nil {
-		return
-	}
-
 	go func() {
-		settings, _ := a.settingsStore.Load()
-		proxyEnabled := settings == nil || settings.ProxyMode
-
 		a.mu.Lock()
+		vc := a.vellumClient
 		sshClient := a.client
 		dt := a.connectedDeviceType
 		a.mu.Unlock()
+		if vc == nil {
+			return
+		}
+
+		settings, _ := a.settingsStore.Load()
+		proxyEnabled := settings == nil || settings.ProxyMode
 
 		if proxyEnabled && sshClient != nil {
 			arch := device.GetArchitecture(component.DeviceType(dt))
-			proxy := vellum.NewProxy(a.vellumClient, sshClient, string(arch))
+			proxy := vellum.NewProxy(vc, sshClient, string(arch))
 			runtime.EventsEmit(a.ctx, "command:output", "Downloading upgrade packages via reManager...\n")
 			err := proxy.ProxyUpgradeDownload(func(progress vellum.ProxyProgress) {
 				runtime.EventsEmit(a.ctx, "command:output", progress.Message+"\n")
@@ -2167,7 +2174,7 @@ func (a *App) RunPackageUpgrade() {
 		runtime.EventsEmit(a.ctx, "command:output", "Running vellum upgrade...\n")
 
 		var dnsError bool
-		err := a.vellumClient.UpgradeStreaming(func(line string) {
+		err := vc.UpgradeStreaming(func(line string) {
 			runtime.EventsEmit(a.ctx, "command:output", line+"\n")
 			if strings.Contains(strings.ToLower(line), "dns:") {
 				dnsError = true
@@ -2312,12 +2319,15 @@ func (a *App) GetPackageCompatibilityStatus() PackageCompatibilityStatus {
 }
 
 func (a *App) RunUpgrade() {
-	if a.vellumClient == nil {
-		return
-	}
-
 	go func() {
-		osState, err := a.vellumClient.GetOSVersionState()
+		a.mu.Lock()
+		vc := a.vellumClient
+		a.mu.Unlock()
+		if vc == nil {
+			return
+		}
+
+		osState, err := vc.GetOSVersionState()
 		if err != nil {
 			runtime.EventsEmit(a.ctx, "upgrade:error", "Failed to get OS version state")
 			return
@@ -2326,7 +2336,7 @@ func (a *App) RunUpgrade() {
 		if osState.Mismatch {
 			runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("Checking package compatibility with OS %s...\n", osState.CurrentVersion))
 
-			compat, err := a.vellumClient.CheckOSCompatibility(osState.CurrentVersion)
+			compat, err := vc.CheckOSCompatibility(osState.CurrentVersion)
 			if err != nil && compat.FetchFailed {
 				runtime.EventsEmit(a.ctx, "upgrade:error", "Could not fetch package index to verify compatibility")
 				return
@@ -2355,7 +2365,7 @@ func (a *App) RunUpgrade() {
 
 		if proxyEnabled && sshClient != nil {
 			arch := device.GetArchitecture(component.DeviceType(dt))
-			proxy := vellum.NewProxy(a.vellumClient, sshClient, string(arch))
+			proxy := vellum.NewProxy(vc, sshClient, string(arch))
 			runtime.EventsEmit(a.ctx, "command:output", "Downloading upgrade packages via reManager...\n")
 			proxyErr := proxy.ProxyUpgradeDownload(func(progress vellum.ProxyProgress) {
 				runtime.EventsEmit(a.ctx, "command:output", progress.Message+"\n")
@@ -2373,7 +2383,7 @@ func (a *App) RunUpgrade() {
 		runtime.EventsEmit(a.ctx, "command:output", "Running vellum upgrade...\n")
 
 		var dnsError bool
-		err = a.vellumClient.UpgradeStreaming(func(line string) {
+		err = vc.UpgradeStreaming(func(line string) {
 			runtime.EventsEmit(a.ctx, "command:output", line+"\n")
 			if strings.Contains(strings.ToLower(line), "dns:") {
 				dnsError = true
@@ -2735,9 +2745,17 @@ func (a *App) InstallPackages(packageNames []string, deviceType string) {
 	}
 	go func() {
 		a.mu.Lock()
+		vc := a.vellumClient
 		a.installCancelCh = make(chan struct{})
 		cancelCh := a.installCancelCh
 		a.mu.Unlock()
+		if vc == nil {
+			runtime.EventsEmit(a.ctx, "install:complete", InstallResult{
+				Success: false,
+				Errors:  []string{"Not connected"},
+			})
+			return
+		}
 
 		defer func() {
 			a.mu.Lock()
@@ -2780,7 +2798,7 @@ func (a *App) InstallPackages(packageNames []string, deviceType string) {
 
 		var allPackages []string
 		if sshClient != nil && proxyEnabled {
-			proxy := vellum.NewProxy(a.vellumClient, sshClient, string(arch))
+			proxy := vellum.NewProxy(vc, sshClient, string(arch))
 			runtime.EventsEmit(a.ctx, "install:progress", InstallProgress{
 				Status:  "downloading",
 				Message: "Downloading packages via reManager...",
@@ -2816,7 +2834,7 @@ func (a *App) InstallPackages(packageNames []string, deviceType string) {
 		}
 
 		exec := &wailsExecutor{app: a}
-		inst := installer.NewInstaller(a.vellumClient, a.metadata, exec)
+		inst := installer.NewInstaller(vc, a.metadata, exec)
 
 		result := inst.Install(
 			packageNames,
@@ -2887,9 +2905,17 @@ func (a *App) UninstallPackages(packageNames []string, deviceType string) {
 	}
 	go func() {
 		a.mu.Lock()
+		vc := a.vellumClient
 		a.installCancelCh = make(chan struct{})
 		cancelCh := a.installCancelCh
 		a.mu.Unlock()
+		if vc == nil {
+			runtime.EventsEmit(a.ctx, "install:complete", InstallResult{
+				Success: false,
+				Errors:  []string{"Not connected"},
+			})
+			return
+		}
 
 		defer func() {
 			a.mu.Lock()
@@ -2926,39 +2952,35 @@ func (a *App) UninstallPackages(packageNames []string, deviceType string) {
 		useRecursive := false
 		useBatch := false
 
-		if a.vellumClient != nil {
-			simResult, err := a.vellumClient.SimulateDel(packageNames...)
+		simResult, err := vc.SimulateDel(packageNames...)
+		if err != nil {
+			debug.Printf("[DEBUG] SimulateDel failed: %v, trying recursive\n", err)
+			useRecursive = true
+			allPackages, err = vc.SimulateDelRecursive(packageNames...)
 			if err != nil {
-				debug.Printf("[DEBUG] SimulateDel failed: %v, trying recursive\n", err)
+				debug.Printf("[DEBUG] SimulateDelRecursive also failed: %v\n", err)
+				allPackages = packageNames
+			}
+		} else if len(simResult.Blocked) > 0 || len(simResult.Packages) == 0 {
+			worldToRemove, allAffected, wErr := a.resolveWorldDeps(packageNames)
+			if wErr != nil || len(worldToRemove) == 0 {
+				debug.Printf("[DEBUG] resolveWorldDeps failed or empty: %v\n", wErr)
 				useRecursive = true
-				allPackages, err = a.vellumClient.SimulateDelRecursive(packageNames...)
+				allPackages, err = vc.SimulateDelRecursive(packageNames...)
 				if err != nil {
-					debug.Printf("[DEBUG] SimulateDelRecursive also failed: %v\n", err)
+					debug.Printf("[DEBUG] SimulateDelRecursive failed: %v\n", err)
 					allPackages = packageNames
-				}
-			} else if len(simResult.Blocked) > 0 || len(simResult.Packages) == 0 {
-				worldToRemove, allAffected, wErr := a.resolveWorldDeps(packageNames)
-				if wErr != nil || len(worldToRemove) == 0 {
-					debug.Printf("[DEBUG] resolveWorldDeps failed or empty: %v\n", wErr)
-					useRecursive = true
-					allPackages, err = a.vellumClient.SimulateDelRecursive(packageNames...)
-					if err != nil {
-						debug.Printf("[DEBUG] SimulateDelRecursive failed: %v\n", err)
-						allPackages = packageNames
-					}
-				} else {
-					packageNames = worldToRemove
-					allPackages = allAffected
-					useBatch = true
 				}
 			} else {
-				allPackages = simResult.Packages
-				if len(allPackages) == 0 {
-					allPackages = packageNames
-				}
+				packageNames = worldToRemove
+				allPackages = allAffected
+				useBatch = true
 			}
 		} else {
-			allPackages = packageNames
+			allPackages = simResult.Packages
+			if len(allPackages) == 0 {
+				allPackages = packageNames
+			}
 		}
 
 		if isCancelled() {
@@ -2970,7 +2992,7 @@ func (a *App) UninstallPackages(packageNames []string, deviceType string) {
 		}
 
 		exec := &wailsExecutor{app: a}
-		inst := installer.NewInstaller(a.vellumClient, a.metadata, exec)
+		inst := installer.NewInstaller(vc, a.metadata, exec)
 
 		result := inst.Uninstall(
 			packageNames,
