@@ -5825,9 +5825,14 @@ func (a *App) RescanLibrary() error {
 	}
 	defer session.Close()
 
-	_, err = session.CombinedOutput("echo '>erescanLibrary:' > /run/xovi-mb")
+	out, err := session.CombinedOutput("echo '>erescanLibrary:' > /run/xovi-mb; cat /run/xovi-mb-out")
 	if err != nil {
 		return fmt.Errorf("failed to rescan library: %w", err)
+	}
+
+	resp := strings.TrimSpace(string(out))
+	if strings.HasPrefix(resp, "ERROR:") {
+		return fmt.Errorf("rescan library: %s", resp)
 	}
 
 	return nil
