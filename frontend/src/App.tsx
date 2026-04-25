@@ -1121,6 +1121,7 @@ export default function App() {
       setBootstrapping(false)
       setBootstrapSuccess(true)
       setVellumInstalled(true)
+      rescanAllPackages()
     })
 
     const unsubscribeBootstrapError = window.runtime.EventsOn('vellum:bootstrap-error', (...args: unknown[]) => {
