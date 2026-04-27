@@ -236,7 +236,7 @@ declare global {
           SetDeviceTimezone(timezone: string, deviceType: string): Promise<void>
           ListDirectory(path: string): Promise<{ name: string; path: string; size: number; isDir: boolean; modTime: number; mode: string }[]>
           DownloadFile(remotePath: string): void
-          UploadFile(remotePath: string): void
+          SelectFilesForUpload(): Promise<string[]>
           UploadFilesFromPaths(localPaths: string[], remotePath: string): void
           DownloadFolder(remotePath: string): void
           UploadFolder(remotePath: string): void

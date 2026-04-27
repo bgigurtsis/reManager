@@ -43,10 +43,10 @@
   type: archive
   url: https://proxy.golang.org/github.com/spf13/cobra/@v/v1.10.2.zip
 - dest: vendor/github.com/wailsapp/wails/v2
-  sha256: 180adf48c80ff08a23a30964fd69f6fe205d7915e5903237b46236f605c0dfd6
+  sha256: 1f599fcbff21b1d46c8a2c20f7da6cdf0913d616ac9f0fbdae07ce2e0cb9e877
   strip-components: 4
   type: archive
-  url: https://proxy.golang.org/github.com/wailsapp/wails/v2/@v/v2.12.0.zip
+  url: https://proxy.golang.org/github.com/wailsapp/wails/v2/@v/v2.11.0.zip
 - dest: vendor/github.com/zalando/go-keyring
   sha256: 8dea1c2777e7275317e5011f54cddb252c017a7e152558c4fcac84fa5101cf4e
   strip-components: 3
@@ -92,11 +92,6 @@
   strip-components: 2
   type: archive
   url: https://proxy.golang.org/dario.cat/mergo/@v/v1.0.0.zip
-- dest: vendor/git.sr.ht/~jackmordaunt/go-toast/v2
-  sha256: 9bb5ce85169e70d3fd58934f471c41ec8d63968e241050fb59a96035f065245f
-  strip-components: 4
-  type: archive
-  url: https://proxy.golang.org/git.sr.ht/~jackmordaunt/go-toast/v2/@v/v2.0.3.zip
 - dest: vendor/github.com/Masterminds/semver
   sha256: 15f6b54a695c15ffb205d5719e5ed50fab9ba9a739e1b4bdf3a0a319f51a7202
   strip-components: 3

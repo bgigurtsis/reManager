@@ -57,11 +57,21 @@ import (
 	rmupdate "github.com/rmitchellscott/remarkable-go/update"
 )
 
-func openFileDialog(ctx context.Context, title string) (string, error) {
+func resolveDialogDir(defaultDir string) string {
+	if defaultDir != "" {
+		if info, err := os.Stat(defaultDir); err == nil && info.IsDir() {
+			return defaultDir
+		}
+	}
+	home, _ := os.UserHomeDir()
+	return home
+}
+
+func openFileDialog(ctx context.Context, title, defaultDir string) (string, error) {
+	dir := resolveDialogDir(defaultDir)
 	if platform.IsRunningInFlatpak() {
-		home, _ := os.UserHomeDir()
 		files, err := filechooser.OpenFile("", title, &filechooser.OpenFileOptions{
-			CurrentFolder: home,
+			CurrentFolder: dir,
 		})
 		fmt.Println("[DEBUG] openFileDialog: files:", files, "err:", err)
 		if err != nil {
@@ -72,18 +82,39 @@ func openFileDialog(ctx context.Context, title string) (string, error) {
 		}
 		return strings.TrimPrefix(files[0], "file://"), nil
 	}
-	home, _ := os.UserHomeDir()
 	return runtime.OpenFileDialog(ctx, runtime.OpenDialogOptions{
 		Title:            title,
-		DefaultDirectory: home,
+		DefaultDirectory: dir,
 	})
 }
 
-func saveFileDialog(ctx context.Context, title, defaultFilename string) (string, error) {
+func openMultipleFilesDialog(ctx context.Context, title, defaultDir string) ([]string, error) {
+	dir := resolveDialogDir(defaultDir)
 	if platform.IsRunningInFlatpak() {
-		home, _ := os.UserHomeDir()
+		files, err := filechooser.OpenFile("", title, &filechooser.OpenFileOptions{
+			CurrentFolder: dir,
+			Multiple:      true,
+		})
+		fmt.Println("[DEBUG] openMultipleFilesDialog: files:", files, "err:", err)
+		if err != nil {
+			return nil, err
+		}
+		for i, f := range files {
+			files[i] = strings.TrimPrefix(f, "file://")
+		}
+		return files, nil
+	}
+	return runtime.OpenMultipleFilesDialog(ctx, runtime.OpenDialogOptions{
+		Title:            title,
+		DefaultDirectory: dir,
+	})
+}
+
+func saveFileDialog(ctx context.Context, title, defaultFilename, defaultDir string) (string, error) {
+	dir := resolveDialogDir(defaultDir)
+	if platform.IsRunningInFlatpak() {
 		files, err := filechooser.SaveFile("", title, &filechooser.SaveFileOptions{
-			CurrentFolder: home,
+			CurrentFolder: dir,
 			CurrentName:   defaultFilename,
 		})
 		fmt.Println("[DEBUG] saveFileDialog: files:", files, "err:", err)
@@ -95,19 +126,18 @@ func saveFileDialog(ctx context.Context, title, defaultFilename string) (string,
 		}
 		return strings.TrimPrefix(files[0], "file://"), nil
 	}
-	home, _ := os.UserHomeDir()
 	return runtime.SaveFileDialog(ctx, runtime.SaveDialogOptions{
 		Title:            title,
 		DefaultFilename:  defaultFilename,
-		DefaultDirectory: home,
+		DefaultDirectory: dir,
 	})
 }
 
-func openDirectoryDialog(ctx context.Context, title string) (string, error) {
+func openDirectoryDialog(ctx context.Context, title, defaultDir string) (string, error) {
+	dir := resolveDialogDir(defaultDir)
 	if platform.IsRunningInFlatpak() {
-		home, _ := os.UserHomeDir()
 		files, err := filechooser.OpenFile("", title, &filechooser.OpenFileOptions{
-			CurrentFolder: home,
+			CurrentFolder: dir,
 			Directory:     true,
 		})
 		fmt.Println("[DEBUG] openDirectoryDialog: files:", files, "err:", err)
@@ -119,10 +149,9 @@ func openDirectoryDialog(ctx context.Context, title string) (string, error) {
 		}
 		return strings.TrimPrefix(files[0], "file://"), nil
 	}
-	home, _ := os.UserHomeDir()
 	return runtime.OpenDirectoryDialog(ctx, runtime.OpenDialogOptions{
 		Title:            title,
-		DefaultDirectory: home,
+		DefaultDirectory: dir,
 	})
 }
 
@@ -301,7 +330,7 @@ func (a *App) GetDefaultSSHKeys() []SSHKey {
 }
 
 func (a *App) SelectKeyFile() string {
-	path, err := openFileDialog(a.ctx, "Select SSH Private Key")
+	path, err := openFileDialog(a.ctx, "Select SSH Private Key", "")
 	if err != nil {
 		return ""
 	}
@@ -2499,13 +2528,14 @@ type TransferProgress struct {
 }
 
 type FolderTransferProgress struct {
-	CurrentFile string  `json:"currentFile"`
-	FilesDone   int     `json:"filesDone"`
-	FilesTotal  int     `json:"filesTotal"`
-	BytesDone   int64   `json:"bytesDone"`
-	BytesTotal  int64   `json:"bytesTotal"`
-	Percentage  float64 `json:"percentage"`
-	Status      string  `json:"status"`
+	CurrentFile    string  `json:"currentFile"`
+	FilesDone      int     `json:"filesDone"`
+	FilesTotal     int     `json:"filesTotal"`
+	BytesDone      int64   `json:"bytesDone"`
+	BytesTotal     int64   `json:"bytesTotal"`
+	Percentage     float64 `json:"percentage"`
+	Status         string  `json:"status"`
+	ContainsFolder bool    `json:"containsFolder"`
 }
 
 type DialogActionRequest struct {
@@ -4142,9 +4172,21 @@ func (a *App) DownloadFile(remotePath string) {
 		}
 
 		filename := path.Base(remotePath)
-		localPath, err := saveFileDialog(a.ctx, "Save File", filename)
+		var lastDir string
+		if a.settingsStore != nil {
+			if settings, err := a.settingsStore.Load(); err == nil {
+				lastDir = settings.LastDownloadDir
+			}
+		}
+		localPath, err := saveFileDialog(a.ctx, "Save File", filename, lastDir)
 		if err != nil || localPath == "" {
 			return
+		}
+		if a.settingsStore != nil {
+			if settings, err := a.settingsStore.Load(); err == nil {
+				settings.LastDownloadDir = filepath.Dir(localPath)
+				_ = a.settingsStore.Save(settings)
+			}
 		}
 
 		sftpClient, err := sftp.NewClient(client)
@@ -4256,9 +4298,21 @@ func (a *App) DownloadFolder(remotePath string) {
 		}
 
 		folderName := path.Base(remotePath)
-		localDir, err := openDirectoryDialog(a.ctx, "Save Folder To")
+		var lastDir string
+		if a.settingsStore != nil {
+			if settings, err := a.settingsStore.Load(); err == nil {
+				lastDir = settings.LastDownloadDir
+			}
+		}
+		localDir, err := openDirectoryDialog(a.ctx, "Save Folder To", lastDir)
 		if err != nil || localDir == "" {
 			return
+		}
+		if a.settingsStore != nil {
+			if settings, err := a.settingsStore.Load(); err == nil {
+				settings.LastDownloadDir = localDir
+				_ = a.settingsStore.Save(settings)
+			}
 		}
 		localBasePath := filepath.Join(localDir, folderName)
 
@@ -4358,7 +4412,7 @@ func (a *App) downloadFolderRecursive(sftpClient *sftp.Client, remotePath, local
 			*failedFiles = append(*failedFiles, remotePath)
 		}
 		*filesDone++
-		a.emitFolderProgress(path.Base(remotePath), *filesDone, filesTotal, *bytesDone, bytesTotal, "downloading")
+		a.emitFolderProgress(path.Base(remotePath), *filesDone, filesTotal, *bytesDone, bytesTotal, "downloading", true)
 		return nil
 	}
 
@@ -4412,7 +4466,7 @@ func (a *App) downloadFolderRecursive(sftpClient *sftp.Client, remotePath, local
 				return nil
 			}
 			*bytesDone += int64(n)
-			a.emitFolderProgress(path.Base(remotePath), *filesDone, filesTotal, *bytesDone, bytesTotal, "downloading")
+			a.emitFolderProgress(path.Base(remotePath), *filesDone, filesTotal, *bytesDone, bytesTotal, "downloading", true)
 		}
 		if err == io.EOF {
 			break
@@ -4424,147 +4478,48 @@ func (a *App) downloadFolderRecursive(sftpClient *sftp.Client, remotePath, local
 	}
 
 	*filesDone++
-	a.emitFolderProgress(path.Base(remotePath), *filesDone, filesTotal, *bytesDone, bytesTotal, "downloading")
+	a.emitFolderProgress(path.Base(remotePath), *filesDone, filesTotal, *bytesDone, bytesTotal, "downloading", true)
 	return nil
 }
 
-func (a *App) emitFolderProgress(currentFile string, filesDone, filesTotal int, bytesDone, bytesTotal int64, status string) {
+func (a *App) emitFolderProgress(currentFile string, filesDone, filesTotal int, bytesDone, bytesTotal int64, status string, containsFolder bool) {
 	var percentage float64
 	if bytesTotal > 0 {
 		percentage = float64(bytesDone) / float64(bytesTotal) * 100
 	}
 	runtime.EventsEmit(a.ctx, "filebrowser:folder-progress", FolderTransferProgress{
-		CurrentFile: currentFile,
-		FilesDone:   filesDone,
-		FilesTotal:  filesTotal,
-		BytesDone:   bytesDone,
-		BytesTotal:  bytesTotal,
-		Percentage:  percentage,
-		Status:      status,
+		CurrentFile:    currentFile,
+		FilesDone:      filesDone,
+		FilesTotal:     filesTotal,
+		BytesDone:      bytesDone,
+		BytesTotal:     bytesTotal,
+		Percentage:     percentage,
+		Status:         status,
+		ContainsFolder: containsFolder,
 	})
 }
 
-func (a *App) UploadFile(remotePath string) {
-	go func() {
-		a.mu.Lock()
-		client := a.client
-		a.mu.Unlock()
-
-		if client == nil {
-			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
-				"message": "Not connected",
-			})
-			return
+func (a *App) SelectFilesForUpload() []string {
+	var lastDir string
+	if a.settingsStore != nil {
+		if settings, err := a.settingsStore.Load(); err == nil {
+			lastDir = settings.LastUploadDir
 		}
+	}
 
-		localPath, err := openFileDialog(a.ctx, "Select File to Upload")
-		if err != nil || localPath == "" {
-			return
+	files, err := openMultipleFilesDialog(a.ctx, "Select files to upload", lastDir)
+	if err != nil || len(files) == 0 {
+		return []string{}
+	}
+
+	if a.settingsStore != nil {
+		if settings, err := a.settingsStore.Load(); err == nil {
+			settings.LastUploadDir = filepath.Dir(files[0])
+			_ = a.settingsStore.Save(settings)
 		}
+	}
 
-		localFile, err := os.Open(localPath)
-		if err != nil {
-			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
-				"message": fmt.Sprintf("Failed to open local file: %v", err),
-			})
-			return
-		}
-		defer localFile.Close()
-
-		stat, err := localFile.Stat()
-		if err != nil {
-			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
-				"message": fmt.Sprintf("Failed to stat local file: %v", err),
-			})
-			return
-		}
-		totalBytes := stat.Size()
-		filename := stat.Name()
-
-		destPath := remotePath
-		if strings.HasSuffix(remotePath, "/") || remotePath == "" {
-			destPath = path.Join(remotePath, filename)
-		}
-
-		// Make filesystem writable for system paths on RMPP devices
-		if isSystemPath(destPath) {
-			if err := a.makeFilesystemWritable(client); err != nil {
-				runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
-					"message": fmt.Sprintf("Failed to prepare filesystem: %v", err),
-				})
-				return
-			}
-			defer a.restoreFilesystemDeferred(client)
-		}
-
-		sftpClient, err := sftp.NewClient(client)
-		if err != nil {
-			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
-				"message": fmt.Sprintf("Failed to create SFTP client: %v", err),
-			})
-			return
-		}
-		defer sftpClient.Close()
-
-		remoteFile, err := sftpClient.Create(destPath)
-		if err != nil {
-			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
-				"message": fmt.Sprintf("Failed to create remote file: %v", err),
-			})
-			return
-		}
-		defer remoteFile.Close()
-
-		buffer := make([]byte, 32*1024)
-		var transferred int64
-
-		for {
-			n, err := localFile.Read(buffer)
-			if n > 0 {
-				_, writeErr := remoteFile.Write(buffer[:n])
-				if writeErr != nil {
-					runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
-						"message": fmt.Sprintf("Failed to write to remote file: %v", writeErr),
-					})
-					return
-				}
-				transferred += int64(n)
-
-				var percentage float64
-				if totalBytes > 0 {
-					percentage = float64(transferred) / float64(totalBytes) * 100
-				}
-				runtime.EventsEmit(a.ctx, "filebrowser:progress", TransferProgress{
-					Filename:   filename,
-					BytesSent:  transferred,
-					TotalBytes: totalBytes,
-					Percentage: percentage,
-					Status:     "uploading",
-				})
-			}
-			if err == io.EOF {
-				break
-			}
-			if err != nil {
-				runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
-					"message": fmt.Sprintf("Failed to read local file: %v", err),
-				})
-				return
-			}
-		}
-
-		runtime.EventsEmit(a.ctx, "filebrowser:progress", TransferProgress{
-			Filename:   filename,
-			BytesSent:  totalBytes,
-			TotalBytes: totalBytes,
-			Percentage: 100,
-			Status:     "uploading",
-		})
-
-		runtime.EventsEmit(a.ctx, "filebrowser:upload-complete", map[string]string{
-			"path": destPath,
-		})
-	}()
+	return files
 }
 
 func (a *App) UploadFolder(remotePath string) {
@@ -4580,7 +4535,7 @@ func (a *App) UploadFolder(remotePath string) {
 			return
 		}
 
-		localDir, err := openDirectoryDialog(a.ctx, "Select Folder to Upload")
+		localDir, err := openDirectoryDialog(a.ctx, "Select Folder to Upload", "")
 		if err != nil || localDir == "" {
 			return
 		}
@@ -4699,7 +4654,7 @@ func (a *App) uploadFolderRecursive(sftpClient *sftp.Client, localPath, remotePa
 			*failedFiles = append(*failedFiles, localPath)
 		}
 		*filesDone++
-		a.emitFolderProgress(filepath.Base(localPath), *filesDone, filesTotal, *bytesDone, bytesTotal, "uploading")
+		a.emitFolderProgress(filepath.Base(localPath), *filesDone, filesTotal, *bytesDone, bytesTotal, "uploading", true)
 		return nil
 	}
 
@@ -4753,7 +4708,7 @@ func (a *App) uploadFolderRecursive(sftpClient *sftp.Client, localPath, remotePa
 				return nil
 			}
 			*bytesDone += int64(n)
-			a.emitFolderProgress(filepath.Base(localPath), *filesDone, filesTotal, *bytesDone, bytesTotal, "uploading")
+			a.emitFolderProgress(filepath.Base(localPath), *filesDone, filesTotal, *bytesDone, bytesTotal, "uploading", true)
 		}
 		if err == io.EOF {
 			break
@@ -4765,7 +4720,7 @@ func (a *App) uploadFolderRecursive(sftpClient *sftp.Client, localPath, remotePa
 	}
 
 	*filesDone++
-	a.emitFolderProgress(filepath.Base(localPath), *filesDone, filesTotal, *bytesDone, bytesTotal, "uploading")
+	a.emitFolderProgress(filepath.Base(localPath), *filesDone, filesTotal, *bytesDone, bytesTotal, "uploading", true)
 	return nil
 }
 
@@ -4804,8 +4759,8 @@ func (a *App) UploadFilesFromPaths(localPaths []string, remotePath string) {
 			}
 		}
 
-		if hasFolder {
-			a.uploadMixedPaths(client, localPaths, remotePath)
+		if hasFolder || len(localPaths) > 1 {
+			a.uploadMixedPaths(client, localPaths, remotePath, hasFolder)
 			return
 		}
 
@@ -4832,7 +4787,7 @@ func (a *App) UploadFilesFromPaths(localPaths []string, remotePath string) {
 	}()
 }
 
-func (a *App) uploadMixedPaths(client *ssh.Client, localPaths []string, remotePath string) {
+func (a *App) uploadMixedPaths(client *ssh.Client, localPaths []string, remotePath string, containsFolder bool) {
 	a.folderTransferMu.Lock()
 	a.folderTransferCancelCh = make(chan struct{})
 	cancelCh := a.folderTransferCancelCh
@@ -4925,11 +4880,11 @@ func (a *App) uploadMixedPaths(client *ssh.Client, localPaths []string, remotePa
 						break
 					}
 					bytesDone += int64(n)
-					a.emitFolderProgress(info.Name(), filesDone, filesTotal, bytesDone, bytesTotal, "uploading")
+					a.emitFolderProgress(info.Name(), filesDone, filesTotal, bytesDone, bytesTotal, "uploading", containsFolder)
 				}
 				if err == io.EOF {
 					filesDone++
-					a.emitFolderProgress(info.Name(), filesDone, filesTotal, bytesDone, bytesTotal, "uploading")
+					a.emitFolderProgress(info.Name(), filesDone, filesTotal, bytesDone, bytesTotal, "uploading", containsFolder)
 					break
 				}
 				if err != nil {
@@ -5385,7 +5340,7 @@ func (a *App) SelectBackupFile() string {
 
 	timestamp := time.Now().Format("2006-01-02-150405")
 	defaultName := fmt.Sprintf("remarkable-backup-%s-%s.tar.zst", deviceName, timestamp)
-	destPath, err := saveFileDialog(a.ctx, "Save Backup", defaultName)
+	destPath, err := saveFileDialog(a.ctx, "Save Backup", defaultName, "")
 	if err != nil || destPath == "" {
 		return ""
 	}
@@ -5462,7 +5417,7 @@ func (a *App) CreateDeviceBackup(destPath string) {
 }
 
 func (a *App) SelectRestoreFile() string {
-	archivePath, err := openFileDialog(a.ctx, "Select Backup to Restore")
+	archivePath, err := openFileDialog(a.ctx, "Select Backup to Restore", "")
 	if err != nil || archivePath == "" {
 		return ""
 	}
@@ -6403,7 +6358,7 @@ func (a *App) GenerateSupportBundle(deviceID string) {
 		})
 
 		filename := fmt.Sprintf("remanager-support-%s.tar.gz", time.Now().Format("20060102-150405"))
-		destPath, err := saveFileDialog(a.ctx, "Save Support Bundle", filename)
+		destPath, err := saveFileDialog(a.ctx, "Save Support Bundle", filename, "")
 		if err != nil || destPath == "" {
 			if err != nil {
 				runtime.EventsEmit(a.ctx, "support-bundle:error", map[string]string{
