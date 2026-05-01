@@ -376,7 +376,6 @@ export default function App() {
   const [showAutoUpdateBanner, setShowAutoUpdateBanner] = useState(false)
   const [xochitlRunning, setXochitlRunning] = useState(true)
   const [xoviActive, setXoviActive] = useState(false)
-  const [xoviNotRunning, setXoviNotRunning] = useState(false)
   const [commandContext, setCommandContext] = useState<'install' | 'maintenance' | null>(null)
   const commandContextRef = useRef<'install' | 'maintenance' | null>(null)
   const runningSystemTaskRef = useRef<string | null>(null)
@@ -489,6 +488,10 @@ export default function App() {
 
   const [hashtabMismatch, setHashtabMismatch] = useState<HashtabVersionStatus | null>(null)
   const [hashtabMissing, setHashtabMissing] = useState(false)
+  const xoviNotRunning = useMemo(() =>
+    installedPackages.has('xovi') && xochitlRunning && !xoviActive && !hashtabMismatch && !hashtabMissing,
+    [installedPackages, xochitlRunning, xoviActive, hashtabMismatch, hashtabMissing]
+  )
 
   const [timezoneMismatch, setTimezoneMismatch] = useState<TimezoneStatus | null>(null)
   const [selectedTimezone, setSelectedTimezone] = useState('')
@@ -754,7 +757,6 @@ export default function App() {
     setOutput('')
     setHashtabMismatch(null)
     setHashtabMissing(false)
-    setXoviNotRunning(false)
     setOsMismatchDetected(false)
     osMismatchDetectedRef.current = false
     setOsUpgradeDetected(false)
@@ -993,7 +995,7 @@ export default function App() {
           setHashtabMismatch(null)
         }
         setHashtabMissing(!hashtabStatus.installed && installedPackages.has('qt-resource-rebuilder'))
-        setXoviNotRunning(installedPackages.has('xovi') && xochitlStatus.running && !xochitlStatus.xoviActive && !hashtabStatus.needsRebuild && hashtabStatus.installed)
+
         if (tzStatus.needsUpdate) {
           setTimezoneMismatch(tzStatus)
         } else {
@@ -1084,7 +1086,6 @@ export default function App() {
       const xochitlStatus = await window.go.main.App.GetXochitlStatus()
       setXochitlRunning(xochitlStatus.running)
       setXoviActive(xochitlStatus.xoviActive)
-      setXoviNotRunning(installedPackages.has('xovi') && xochitlStatus.running && !xochitlStatus.xoviActive && !hashtabStatus.needsRebuild && hashtabStatus.installed)
 
       setInstalling(false)
       setUninstalling(false)
@@ -1252,7 +1253,7 @@ export default function App() {
         setTimezoneMismatch(null)
       }
       setXochitlRunning(!w.xochitlNotRunning)
-      setXoviNotRunning(!!w.xoviNotRunning)
+
     })
 
     const unsubscribeGuideOffer = window.runtime.EventsOn('guide:offer', (...args: unknown[]) => {
@@ -1389,7 +1390,6 @@ export default function App() {
         setHashtabMismatch(null)
       }
       setHashtabMissing(!hashtabStatus.installed && installedPackages.has('qt-resource-rebuilder'))
-      setXoviNotRunning(installedPackages.has('xovi') && xochitlStatus.running && !xochitlStatus.xoviActive && !hashtabStatus.needsRebuild && hashtabStatus.installed)
       if (tzStatus.needsUpdate) {
         setTimezoneMismatch(tzStatus)
       } else {
@@ -2470,7 +2470,7 @@ export default function App() {
                       setOsUpgradeDetected(false)
                       setHashtabMismatch(null)
                       setHashtabMissing(false)
-                      setXoviNotRunning(false)
+
                       setTimezoneMismatch(null)
                       setShowAutoUpdateBanner(false)
                       setReenableStatus('')
