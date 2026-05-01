@@ -1236,6 +1236,8 @@ export default function App() {
       setHashtabMissing(!!w.hashtabMissing)
       if (w.autoUpdateEnabled) {
         setShowAutoUpdateBanner(true)
+      } else {
+        setShowAutoUpdateBanner(false)
       }
       if (w.timezoneStatus?.deviceTimezone) {
         setDeviceTimezone(w.timezoneStatus.deviceTimezone)
@@ -1245,6 +1247,8 @@ export default function App() {
         setTimezoneMismatch(w.timezoneMismatch)
         setDeviceTimezone(w.timezoneMismatch.deviceTimezone)
         setSelectedTimezone(w.timezoneMismatch.savedTimezone || w.timezoneMismatch.deviceTimezone)
+      } else {
+        setTimezoneMismatch(null)
       }
       setXochitlRunning(!w.xochitlNotRunning)
       setXoviNotRunning(!!w.xoviNotRunning)
