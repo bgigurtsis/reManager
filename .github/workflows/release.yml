@@ -345,6 +345,11 @@ jobs:
         with:
           path: artifacts
 
+      - name: Rename flatpak bundles
+        run: |
+          mv artifacts/reManager-x86_64.flatpak/reManager.flatpak artifacts/reManager-x86_64.flatpak/reManager-x86_64.flatpak
+          mv artifacts/reManager-aarch64.flatpak/reManager.flatpak artifacts/reManager-aarch64.flatpak/reManager-aarch64.flatpak
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
@@ -355,8 +360,8 @@ jobs:
             artifacts/reManager-linux-arm64/reManager-linux-arm64.tar.gz
             artifacts/reManager-windows-amd64/reManager-windows-amd64.zip
             artifacts/reManager-windows-arm64/reManager-windows-arm64.zip
-            artifacts/reManager-x86_64/reManager-x86_64.flatpak
-            artifacts/reManager-aarch64/reManager-aarch64.flatpak
+            artifacts/reManager-x86_64.flatpak/reManager-x86_64.flatpak
+            artifacts/reManager-aarch64.flatpak/reManager-aarch64.flatpak
 
   publish-guide:
     needs: [release]
