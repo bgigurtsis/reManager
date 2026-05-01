@@ -32,6 +32,7 @@ import { DnsErrorModal } from '@/components/DnsErrorModal'
 import { FilesystemRestoreErrorDialog } from '@/components/FilesystemRestoreErrorDialog'
 import { ImportPDFDialog } from '@/components/ImportPDFDialog'
 import { SoftwareManagerDialog } from '@/components/SoftwareManagerDialog'
+import { UserGuideOffer } from '@/components/UserGuideOffer'
 import { TimezoneCombobox } from '@/components/TimezoneCombobox'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { Badge } from '@/components/ui/badge'
@@ -225,8 +226,12 @@ declare global {
           CancelInstallation(): Promise<void>
           GetAppVersion(): Promise<string>
           CheckForAppUpdate(): Promise<{ updateAvailable: boolean; latestVersion: string; currentVersion: string; releaseURL: string; error?: string }>
-          GetSettings(): Promise<{ tabVisibility: Record<string, boolean>; proxyMode: boolean; suppressSystemFileWarnings: boolean; preventSleep: boolean; theme: string; terminalTheme: string; editorTheme: string; checkForUpdates: boolean; sshAgentSocketPath: string }>
+          GetSettings(): Promise<{ tabVisibility: Record<string, boolean>; proxyMode: boolean; suppressSystemFileWarnings: boolean; suppressGuideOffer: boolean; preventSleep: boolean; theme: string; terminalTheme: string; editorTheme: string; checkForUpdates: boolean; sshAgentSocketPath: string }>
           SaveSettings(tabVisibility: Record<string, boolean>, proxyMode: boolean, suppressSystemFileWarnings: boolean, preventSleep: boolean, theme: string, terminalTheme: string, editorTheme: string, checkForUpdates: boolean, sshAgentSocketPath: string): Promise<void>
+          InstallUserGuide(): Promise<void>
+          CheckUserGuide(): Promise<{ installed: boolean; needsUpdate: boolean; skipped: boolean; docId: string }>
+          DismissGuideOffer(): Promise<void>
+          EnableGuideOffer(): Promise<void>
           GetSystemColorScheme(): Promise<string>
           UninstallVellum(removeAllPackages: boolean): Promise<void>
           CleanupBrokenVellum(): Promise<void>
@@ -393,6 +398,7 @@ export default function App() {
   })
   const [proxyMode, setProxyMode] = useState(true)
   const [suppressSystemFileWarnings, setSuppressSystemFileWarnings] = useState(false)
+  const [suppressGuideOffer, setSuppressGuideOffer] = useState(false)
   const [preventSleep, setPreventSleep] = useState(true)
   const [theme, setTheme] = useState('system')
   const [terminalTheme, setTerminalTheme] = useState('match')
@@ -497,6 +503,10 @@ export default function App() {
   const [showFilesystemRestoreError, setShowFilesystemRestoreError] = useState(false)
   const [isRetryingFilesystemRestore, setIsRetryingFilesystemRestore] = useState(false)
   const [writeableRootBusy, setWriteableRootBusy] = useState(false)
+
+  const [guideOffer, setGuideOffer] = useState<'install' | 'update' | null>(null)
+  const [guideInstalling, setGuideInstalling] = useState(false)
+  const [showGuideRestartDialog, setShowGuideRestartDialog] = useState(false)
 
   const [search, setSearch] = useState('')
   const [categoryFilter, setCategoryFilter] = useState('all')
@@ -628,6 +638,7 @@ export default function App() {
         setTabVisibility(settings?.tabVisibility || { mods: true, maintenance: true, utilities: true })
         setProxyMode(settings?.proxyMode ?? true)
         setSuppressSystemFileWarnings(settings?.suppressSystemFileWarnings ?? false)
+        setSuppressGuideOffer(settings?.suppressGuideOffer ?? false)
         setPreventSleep(settings?.preventSleep ?? true)
         const loadedTheme = settings?.theme || 'system'
         setTheme(loadedTheme)
@@ -1239,6 +1250,11 @@ export default function App() {
       setXoviNotRunning(!!w.xoviNotRunning)
     })
 
+    const unsubscribeGuideOffer = window.runtime.EventsOn('guide:offer', (...args: unknown[]) => {
+      const data = args[0] as { type: 'install' | 'update' }
+      setGuideOffer(data.type)
+    })
+
     const unsubscribeTimezoneComplete = window.runtime.EventsOn('timezone:complete', (...args: unknown[]) => {
       const timezone = args[0] as string
       debugLog('Timezone set complete:', timezone)
@@ -1474,6 +1490,7 @@ export default function App() {
       unsubscribeCleanupComplete()
       unsubscribeCleanupError()
       unsubscribeConnectWarnings()
+      unsubscribeGuideOffer()
       unsubscribeTimezoneComplete()
       unsubscribeTimezoneError()
       unsubscribeUpgradeBlocked()
@@ -1599,6 +1616,8 @@ export default function App() {
     setDevice('')
     setConnectedDeviceId('')
     setConnectionStatus('connected')
+    setGuideOffer(null)
+    setGuideInstalling(false)
 
     const devices = await window.go.main.App.GetSavedDevices()
     setSavedDevices(devices || [])
@@ -2439,6 +2458,38 @@ export default function App() {
                 setTimezoneMismatch(null)
                 setShowAutoUpdateBanner(false)
                 setReenableStatus('')
+              }}
+            />
+          </div>
+        )}
+
+        {step !== 'connect' && guideOffer && (
+          <div className="mb-4">
+            <UserGuideOffer
+              type={guideOffer}
+              installing={guideInstalling}
+              onInstall={async () => {
+                setGuideInstalling(true)
+                try {
+                  await window.go.main.App.InstallUserGuide()
+                  setGuideOffer(null)
+                  if (installedPackages.has('librarian')) {
+                    await window.go.main.App.RescanLibrary()
+                    toast.success('User guide installed on your reMarkable')
+                  } else {
+                    toast.success('User guide installed on your reMarkable')
+                    setShowGuideRestartDialog(true)
+                  }
+                } catch (err) {
+                  toast.error('Failed to install guide: ' + (err instanceof Error ? err.message : String(err)))
+                } finally {
+                  setGuideInstalling(false)
+                }
+              }}
+              onDismiss={() => setGuideOffer(null)}
+              onDismissPermanently={async () => {
+                setGuideOffer(null)
+                await window.go.main.App.DismissGuideOffer()
               }}
             />
           </div>
@@ -3889,6 +3940,37 @@ export default function App() {
         </DialogContent>
       </Dialog>
 
+      {/* Guide installed — restart UI prompt */}
+      <Dialog open={showGuideRestartDialog} onOpenChange={setShowGuideRestartDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Restart reMarkable UI?</DialogTitle>
+            <DialogDescription>
+              The user guide has been installed, but it won't appear on the reMarkable until the UI is restarted.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowGuideRestartDialog(false)}>
+              Not now
+            </Button>
+            <Button onClick={async () => {
+              setShowGuideRestartDialog(false)
+              try {
+                if (xoviActive) {
+                  await window.go.main.App.RunMaintenanceCommand('xovi', 'start', device)
+                } else {
+                  await window.go.main.App.RestartXochitl()
+                }
+              } catch (err) {
+                toast.error('Failed to restart UI: ' + (err instanceof Error ? err.message : String(err)))
+              }
+            }}>
+              Restart
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Start UI Chooser Dialog (shown when xochitl isn't running and xovi is installed) */}
       <Dialog open={showStartUIDialog} onOpenChange={setShowStartUIDialog}>
         <DialogContent className="relative">
@@ -3906,7 +3988,7 @@ export default function App() {
               reMarkable UI stopped
             </DialogTitle>
             <DialogDescription>
-              The tablet interface is currently stopped. How would you like to start it?
+              The reMarkable interface is currently stopped. How would you like to start it?
             </DialogDescription>
           </DialogHeader>
           <div className="flex flex-col gap-2 pt-2">
@@ -4054,8 +4136,29 @@ export default function App() {
         terminalTheme={terminalTheme}
         editorTheme={editorTheme}
         checkForUpdates={checkForUpdates}
+        suppressGuideOffer={suppressGuideOffer}
         sshAgentSocketPath={sshAgentSocketPath}
         onSaveSettings={handleSaveSettings}
+        onToggleGuideOffer={async (enabled) => {
+          if (enabled) {
+            await window.go.main.App.EnableGuideOffer()
+            setSuppressGuideOffer(false)
+            if (device) {
+              const status = await window.go.main.App.CheckUserGuide()
+              if (!status.skipped) {
+                if (!status.installed) {
+                  setGuideOffer('install')
+                } else if (status.needsUpdate) {
+                  setGuideOffer('update')
+                }
+              }
+            }
+          } else {
+            await window.go.main.App.DismissGuideOffer()
+            setSuppressGuideOffer(true)
+            setGuideOffer(null)
+          }
+        }}
         onUninstallVellum={handleUninstallVellum}
         uninstalling={vellumUninstalling}
         uninstallOutput={vellumUninstallOutput}

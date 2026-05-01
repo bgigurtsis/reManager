@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1021,6 +1022,20 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 		}
 
 		runtime.EventsEmit(a.ctx, "connect:warnings", warnings)
+
+		if a.settingsStore != nil {
+			guideSettings, _ := a.settingsStore.Load()
+			if guideSettings != nil && !guideSettings.SuppressGuideOffer {
+				status := a.CheckUserGuide()
+				if !status.Skipped {
+					if !status.Installed {
+						runtime.EventsEmit(a.ctx, "guide:offer", map[string]string{"type": "install"})
+					} else if status.NeedsUpdate {
+						runtime.EventsEmit(a.ctx, "guide:offer", map[string]string{"type": "update"})
+					}
+				}
+			}
+		}
 	}()
 
 	a.mu.Lock()
@@ -3518,6 +3533,7 @@ type BehaviorSettings struct {
 	SuppressSystemFileWarnings bool `json:"suppressSystemFileWarnings"`
 	PreventSleep               bool `json:"preventSleep"`
 	CheckForUpdates            bool `json:"checkForUpdates"`
+	SuppressGuideOffer         bool `json:"suppressGuideOffer"`
 }
 
 type SettingsInfo struct {
@@ -3570,6 +3586,7 @@ func (a *App) GetSettings() SettingsInfo {
 			SuppressSystemFileWarnings: settings.SuppressSystemFileWarnings,
 			PreventSleep:               settings.PreventSleep,
 			CheckForUpdates:            settings.CheckForUpdates,
+			SuppressGuideOffer:         settings.SuppressGuideOffer,
 		},
 		TabVisibility:      settings.TabVisibility,
 		Theme:              settings.Theme,
@@ -3584,6 +3601,12 @@ func (a *App) SaveSettings(tabVisibility map[string]bool, proxyMode bool, suppre
 	if a.settingsStore == nil {
 		return fmt.Errorf("settings store not initialized")
 	}
+	existing, _ := a.settingsStore.Load()
+	var suppressGuideOffer bool
+	if existing != nil {
+		suppressGuideOffer = existing.SuppressGuideOffer
+	}
+
 	settings := &storage.Settings{
 		TabVisibility:              storage.TabVisibility(tabVisibility),
 		ProxyMode:                  proxyMode,
@@ -3593,6 +3616,7 @@ func (a *App) SaveSettings(tabVisibility map[string]bool, proxyMode bool, suppre
 		TerminalTheme:              terminalTheme,
 		EditorTheme:                editorTheme,
 		CheckForUpdates:            checkForUpdates,
+		SuppressGuideOffer:         suppressGuideOffer,
 		SSHAgentSocketPath:         sshAgentSocketPath,
 	}
 
@@ -6044,6 +6068,240 @@ func (a *App) ImportPDFFromPath(localPath, visibleName string, restartXochitl bo
 	}
 
 	return nil
+}
+
+const guideManifestURL = "https://raw.githubusercontent.com/rmitchellscott/remanager/main/docs/guide/guide-manifest.json"
+const guideDownloadURLBase = "https://raw.githubusercontent.com/rmitchellscott/remanager/main/docs/guide/releases/"
+const guideVisibleName = "reManager User Guide"
+
+type UserGuideStatus struct {
+	Installed   bool   `json:"installed"`
+	NeedsUpdate bool   `json:"needsUpdate"`
+	Skipped     bool   `json:"skipped"`
+	DocID       string `json:"docId"`
+}
+
+func (a *App) fetchGuideManifest() (map[string]struct{ SHA256 string `json:"sha256"` }, error) {
+	client := httputil.NewClient(10 * time.Second)
+	resp, err := client.Get(guideManifestURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch guide manifest: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("guide manifest returned HTTP %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read guide manifest: %w", err)
+	}
+
+	var manifest map[string]struct {
+		SHA256 string `json:"sha256"`
+	}
+	if err := json.Unmarshal(body, &manifest); err != nil {
+		return nil, fmt.Errorf("failed to parse guide manifest: %w", err)
+	}
+	return manifest, nil
+}
+
+func (a *App) findGuideOnDevice(sftpClient *sftp.Client) (docID string, err error) {
+	entries, err := sftpClient.ReadDir(pdfimport.XochitlPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read xochitl directory: %w", err)
+	}
+
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".metadata") {
+			continue
+		}
+
+		metaPath := path.Join(pdfimport.XochitlPath, name)
+		f, err := sftpClient.Open(metaPath)
+		if err != nil {
+			continue
+		}
+		data, err := io.ReadAll(f)
+		f.Close()
+		if err != nil {
+			continue
+		}
+
+		var meta struct {
+			VisibleName string `json:"visibleName"`
+		}
+		if err := json.Unmarshal(data, &meta); err != nil {
+			continue
+		}
+		if meta.VisibleName == guideVisibleName {
+			return strings.TrimSuffix(name, ".metadata"), nil
+		}
+	}
+	return "", nil
+}
+
+func (a *App) CheckUserGuide() UserGuideStatus {
+	if version == "dev" {
+		return UserGuideStatus{Skipped: true}
+	}
+
+	v := strings.TrimPrefix(version, "v")
+
+	manifest, err := a.fetchGuideManifest()
+	if err != nil {
+		debug.Printf("[DEBUG] CheckUserGuide: manifest fetch failed: %v\n", err)
+		return UserGuideStatus{Skipped: true}
+	}
+
+	entry, ok := manifest[v]
+	if !ok {
+		debug.Printf("[DEBUG] CheckUserGuide: version %s not in manifest\n", v)
+		return UserGuideStatus{Skipped: true}
+	}
+
+	a.mu.Lock()
+	client := a.client
+	a.mu.Unlock()
+	if client == nil {
+		return UserGuideStatus{Skipped: true}
+	}
+
+	sftpClient, err := sftp.NewClient(client)
+	if err != nil {
+		debug.Printf("[DEBUG] CheckUserGuide: sftp failed: %v\n", err)
+		return UserGuideStatus{Skipped: true}
+	}
+	defer sftpClient.Close()
+
+	docID, err := a.findGuideOnDevice(sftpClient)
+	if err != nil {
+		debug.Printf("[DEBUG] CheckUserGuide: scan failed: %v\n", err)
+		return UserGuideStatus{}
+	}
+
+	if docID == "" {
+		return UserGuideStatus{Installed: false, NeedsUpdate: false}
+	}
+
+	epubPath := path.Join(pdfimport.XochitlPath, docID+".epub")
+	output, err := a.runCommand("sha256sum " + epubPath)
+	if err != nil {
+		debug.Printf("[DEBUG] CheckUserGuide: sha256sum failed: %v\n", err)
+		return UserGuideStatus{Installed: true, DocID: docID}
+	}
+
+	deviceHash := strings.Fields(strings.TrimSpace(output))
+	if len(deviceHash) > 0 && deviceHash[0] == entry.SHA256 {
+		return UserGuideStatus{Installed: true, DocID: docID}
+	}
+
+	return UserGuideStatus{Installed: true, NeedsUpdate: true, DocID: docID}
+}
+
+func (a *App) InstallUserGuide() error {
+	if version == "dev" {
+		return fmt.Errorf("guide installation not available in dev builds")
+	}
+
+	v := strings.TrimPrefix(version, "v")
+
+	a.mu.Lock()
+	client := a.client
+	a.mu.Unlock()
+	if client == nil {
+		return fmt.Errorf("not connected")
+	}
+
+	downloadURL := guideDownloadURLBase + v + ".epub"
+	resp, err := http.Get(downloadURL)
+	if err != nil {
+		return fmt.Errorf("failed to download guide: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("guide download returned HTTP %d", resp.StatusCode)
+	}
+
+	epubData, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read guide data: %w", err)
+	}
+
+	manifest, err := a.fetchGuideManifest()
+	if err != nil {
+		return fmt.Errorf("failed to verify guide: %w", err)
+	}
+	entry, ok := manifest[v]
+	if !ok {
+		return fmt.Errorf("no guide available for version %s", v)
+	}
+
+	h := sha256.Sum256(epubData)
+	if fmt.Sprintf("%x", h) != entry.SHA256 {
+		return fmt.Errorf("guide checksum mismatch")
+	}
+
+	sftpClient, err := sftp.NewClient(client)
+	if err != nil {
+		return fmt.Errorf("failed to create SFTP client: %w", err)
+	}
+	defer sftpClient.Close()
+
+	existingID, _ := a.findGuideOnDevice(sftpClient)
+	if existingID != "" {
+		base := path.Join(pdfimport.XochitlPath, existingID)
+		for _, ext := range []string{".epub", ".content", ".metadata", ".pagedata"} {
+			sftpClient.Remove(base + ext)
+		}
+		thumbDir := base + ".thumbnails"
+		if entries, err := sftpClient.ReadDir(thumbDir); err == nil {
+			for _, e := range entries {
+				sftpClient.Remove(path.Join(thumbDir, e.Name()))
+			}
+			sftpClient.RemoveDirectory(thumbDir)
+		}
+		cacheDir := base + ".cache"
+		if entries, err := sftpClient.ReadDir(cacheDir); err == nil {
+			for _, e := range entries {
+				sftpClient.Remove(path.Join(cacheDir, e.Name()))
+			}
+			sftpClient.RemoveDirectory(cacheDir)
+		}
+	}
+
+	if _, err := epubimport.Upload(sftpClient, epubData, guideVisibleName, ""); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (a *App) DismissGuideOffer() error {
+	if a.settingsStore == nil {
+		return fmt.Errorf("settings store not initialized")
+	}
+	settings, err := a.settingsStore.Load()
+	if err != nil {
+		return err
+	}
+	settings.SuppressGuideOffer = true
+	return a.settingsStore.Save(settings)
+}
+
+func (a *App) EnableGuideOffer() error {
+	if a.settingsStore == nil {
+		return fmt.Errorf("settings store not initialized")
+	}
+	settings, err := a.settingsStore.Load()
+	if err != nil {
+		return err
+	}
+	settings.SuppressGuideOffer = false
+	return a.settingsStore.Save(settings)
 }
 
 // Input event bytes for BTN_TOUCH (arm64: 24 bytes per event)
