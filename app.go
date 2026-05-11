@@ -187,6 +187,7 @@ type App struct {
 	connectedDeviceID      string
 	connectedDeviceType    rmdevice.Type
 	connectedDeviceArch    rmdevice.Architecture
+	connectedFirmware      string
 	writeableRootBusy      bool
 	reconnecting           bool
 	reconnectMu            sync.Mutex
@@ -947,23 +948,6 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 		}
 
 		if vellumReady {
-			settings, _ := a.settingsStore.Load()
-			proxyEnabled := settings == nil || settings.ProxyMode
-
-			if proxyEnabled {
-				a.mu.Lock()
-				sshClient := a.client
-				a.mu.Unlock()
-				if sshClient != nil {
-					proxy := vellum.NewProxy(vc, sshClient, string(deviceArch))
-					_ = proxy.UploadAPKINDEX(func(msg string) {
-						debug.Printf("[DEBUG] Upgrade check APKINDEX: %s\n", msg)
-					})
-				}
-			}
-
-			upgradeResult, simErr := vc.SimulateUpgrade()
-
 			osState, err := vc.GetOSVersionState()
 			debug.Printf("[DEBUG] GetOSVersionState: stored=%q, current=%q, mismatch=%v, err=%v\n", osState.StoredVersion, osState.CurrentVersion, osState.Mismatch, err)
 			if err == nil {
@@ -976,10 +960,65 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 					"prevVersion": osState.StoredVersion,
 					"newVersion":  osState.CurrentVersion,
 				}
+
+				var filteredInstalled []string
+				if installedVersions != nil {
+					for name := range installedVersions {
+						if !hiddenPackages[name] {
+							filteredInstalled = append(filteredInstalled, name)
+						}
+					}
+				}
+
+				compat, compatErr := vc.CheckOSCompatibility(osState.CurrentVersion)
+
+				compatStatus := PackageCompatibilityStatus{
+					InstalledPackages: filteredInstalled,
+					CurrentOsVersion:  osState.CurrentVersion,
+					StoredOsVersion:   osState.StoredVersion,
+				}
+
+				if compatErr != nil || compat == nil || compat.FetchFailed {
+					compatStatus.FetchFailed = true
+					compatStatus.CompatiblePackages = filteredInstalled
+					compatStatus.IncompatiblePackages = []string{}
+				} else {
+					statusMap := make(map[string]string)
+					for _, name := range append(append(compat.Compatible, compat.Incompatible...), compat.NoConstraint...) {
+						pkg := a.metadata.GetPackage(name)
+						if pkg != nil && pkg.Status != "" && pkg.Status != "maintained" {
+							statusMap[name] = pkg.Status
+						}
+					}
+					compatStatus.CompatiblePackages = append(compat.Compatible, compat.NoConstraint...)
+					compatStatus.IncompatiblePackages = compat.Incompatible
+					compatStatus.StatusMap = statusMap
+				}
+
+				warnings["compatibilityStatus"] = compatStatus
 			}
 
-			if simErr == nil && upgradeResult.HasUpgrades {
-				if _, hasMismatch := warnings["osMismatch"]; !hasMismatch {
+			runtime.EventsEmit(a.ctx, "connect:warnings", warnings)
+
+			if _, hasMismatch := warnings["osMismatch"]; !hasMismatch {
+				settings, _ := a.settingsStore.Load()
+				proxyEnabled := settings == nil || settings.ProxyMode
+
+				if proxyEnabled {
+					a.mu.Lock()
+					sshClient := a.client
+					a.mu.Unlock()
+					if sshClient != nil {
+						proxy := vellum.NewProxy(vc, sshClient, string(deviceArch))
+						_ = proxy.UploadAPKINDEX(func(msg string) {
+							debug.Printf("[DEBUG] Upgrade check APKINDEX: %s\n", msg)
+						})
+					}
+				}
+
+				upgradeResult, simErr := vc.SimulateUpgrade()
+
+				if simErr == nil && upgradeResult.HasUpgrades {
 					runtime.EventsEmit(a.ctx, "packages:upgrades-available", map[string]interface{}{
 						"packages": upgradeResult.Packages,
 					})
@@ -1002,14 +1041,12 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 					OSVersion:            osVersionStored,
 					CachedAt:             time.Now().Unix(),
 				}
-				if devInfo := a.GetDeviceInfo(); len(devInfo) > 0 {
-					cached.MachineType = devInfo["machine"]
-					cached.FirmwareVersion = devInfo["firmware"]
-				}
-				if vc != nil {
-					if versions, err := vc.ListInstalledWithVersions(); err == nil {
-						cached.InstalledPackages = versions
-					}
+				a.mu.Lock()
+				cached.MachineType = a.connectedDeviceType.DisplayName()
+				cached.FirmwareVersion = a.connectedFirmware
+				a.mu.Unlock()
+				if installedVersions != nil {
+					cached.InstalledPackages = installedVersions
 				}
 				if partInfo, err := a.GetPartitionInfo(); err == nil {
 					cached.PartitionInfo = partInfo
@@ -1020,7 +1057,9 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 			}
 		}
 
-		runtime.EventsEmit(a.ctx, "connect:warnings", warnings)
+		if !vellumReady {
+			runtime.EventsEmit(a.ctx, "connect:warnings", warnings)
+		}
 
 		if a.settingsStore != nil {
 			guideSettings, _ := a.settingsStore.Load()
@@ -1037,9 +1076,11 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 		}
 	}()
 
+	firmware := a.readFirmwareVersion()
 	a.mu.Lock()
 	a.connectedDeviceType = deviceType
 	a.connectedDeviceArch = deviceArch
+	a.connectedFirmware = firmware
 	a.mu.Unlock()
 
 	return ConnectionResult{
@@ -1078,6 +1119,21 @@ func (a *App) detectDevice() (rmdevice.Type, rmdevice.Architecture, error) {
 	return deviceType, arch, nil
 }
 
+func (a *App) readFirmwareVersion() string {
+	if output, err := a.runCommand("grep REMARKABLE_RELEASE_VERSION /usr/share/remarkable/update.conf"); err == nil {
+		if parts := strings.SplitN(output, "=", 2); len(parts) == 2 {
+			return strings.TrimSpace(parts[1])
+		}
+	}
+	if output, err := a.runCommand("grep IMG_VERSION /etc/os-release"); err == nil {
+		if parts := strings.SplitN(output, "=", 2); len(parts) == 2 {
+			return strings.Trim(strings.TrimSpace(parts[1]), "\"")
+		}
+	}
+	return ""
+}
+
+
 func (a *App) Disconnect() {
 	if a.logger != nil {
 		a.logger.LogConnection("disconnect", "user initiated")
@@ -1098,6 +1154,7 @@ func (a *App) Disconnect() {
 	a.connectedDeviceID = ""
 	a.connectedDeviceType = ""
 	a.connectedDeviceArch = ""
+	a.connectedFirmware = ""
 	a.writeableRootBusy = false
 
 	if a.client != nil {
@@ -1691,19 +1748,8 @@ func (a *App) GetDeviceInfo() map[string]string {
 		return info
 	}
 
-	if output, err := a.runCommand("cat /sys/devices/soc0/machine"); err == nil {
-		info["machine"] = strings.TrimSpace(output)
-	}
-
-	if output, err := a.runCommand("grep REMARKABLE_RELEASE_VERSION /usr/share/remarkable/update.conf"); err == nil {
-		if parts := strings.SplitN(output, "=", 2); len(parts) == 2 {
-			info["firmware"] = strings.TrimSpace(parts[1])
-		}
-	} else if output, err := a.runCommand("grep IMG_VERSION /etc/os-release"); err == nil {
-		if parts := strings.SplitN(output, "=", 2); len(parts) == 2 {
-			info["firmware"] = strings.Trim(strings.TrimSpace(parts[1]), "\"")
-		}
-	}
+	info["machine"] = a.connectedDeviceType.DisplayName()
+	info["firmware"] = a.connectedFirmware
 
 	vellumClient := a.vellumClient
 	a.mu.Unlock()
@@ -2542,6 +2588,17 @@ func (a *App) GetMaintenanceCommands(pkgName string) []MaintenanceCommandInfo {
 		}
 	}
 
+	return result
+}
+
+func (a *App) GetAllMaintenanceCommands() map[string][]MaintenanceCommandInfo {
+	result := make(map[string][]MaintenanceCommandInfo)
+	for _, pkg := range a.metadata.GetAllPackages() {
+		cmds := a.GetMaintenanceCommands(pkg.Name)
+		if len(cmds) > 0 {
+			result[pkg.Name] = cmds
+		}
+	}
 	return result
 }
 

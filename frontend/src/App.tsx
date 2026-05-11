@@ -220,6 +220,7 @@ declare global {
             fetchFailed: boolean
           }>
           GetMaintenanceCommands(pkgName: string): Promise<MaintenanceCommandInfo[]>
+          GetAllMaintenanceCommands(): Promise<Record<string, MaintenanceCommandInfo[]>>
           GetSystemTasksInfo(): Promise<SystemTaskInfo[]>
           GetDeviceDisplayName(machine: string): Promise<string>
           GetDeviceArchitecture(deviceType: string): Promise<string>
@@ -820,14 +821,8 @@ export default function App() {
       setNewOsVersion(installedResult.newVersion)
     }
 
-    const maintCmds: Record<string, MaintenanceCommandInfo[]> = {}
-    for (const pkg of filteredPkgs) {
-      const cmds = await window.go.main.App.GetMaintenanceCommands(pkg.name)
-      if (cmds && cmds.length > 0) {
-        maintCmds[pkg.name] = cmds
-      }
-    }
-    setMaintenanceCommands(maintCmds)
+    const maintCmds = await window.go.main.App.GetAllMaintenanceCommands()
+    setMaintenanceCommands(maintCmds || {})
   }
 
   const handleConnectToSavedDevice = async (id: string) => {
@@ -1215,6 +1210,15 @@ export default function App() {
     const unsubscribeConnectWarnings = window.runtime.EventsOn('connect:warnings', (...args: unknown[]) => {
       const w = args[0] as {
         osMismatch?: { prevVersion: string; newVersion: string }
+        compatibilityStatus?: {
+          installedPackages: string[]
+          compatiblePackages: string[]
+          incompatiblePackages: string[]
+          currentOsVersion: string
+          storedOsVersion: string
+          fetchFailed: boolean
+          statusMap?: Record<string, string>
+        }
         reenableStatus?: string
         hashtabMismatch?: HashtabVersionStatus
         hashtabMissing?: boolean
@@ -1233,6 +1237,10 @@ export default function App() {
         osMismatchDetectedRef.current = true
         setStoredOsVersion(w.osMismatch.prevVersion)
         setCurrentOsVersion(w.osMismatch.newVersion)
+        if (w.compatibilityStatus) {
+          debugLog('connect:warnings — compatibilityStatus received inline')
+          setCompatibilityStatus(w.compatibilityStatus)
+        }
       } else {
         debugLog('connect:warnings — no osMismatch, clearing')
         setOsMismatchDetected(false)
@@ -1531,19 +1539,6 @@ export default function App() {
     }
   }, [pendingXoviInfo])
 
-  useEffect(() => {
-    if (osMismatchDetected && !compatibilityStatus) {
-      debugLog('useEffect: osMismatchDetected=true, compatibilityStatus=null — fetching compatibility')
-      setChecklistLoading(true)
-      window.go.main.App.GetPackageCompatibilityStatus().then(status => {
-        debugLog('useEffect: GetPackageCompatibilityStatus result:', status)
-        setCompatibilityStatus(status)
-        setChecklistLoading(false)
-      }).catch(() => {
-        setChecklistLoading(false)
-      })
-    }
-  }, [osMismatchDetected, compatibilityStatus])
 
   const handleConnect = async (saveAfterConnect: boolean) => {
     const thisAttempt = ++connectAttemptRef.current
@@ -1570,7 +1565,7 @@ export default function App() {
 
         if (saveAfterConnect) {
           const info = await window.go.main.App.GetDeviceInfo()
-          const displayName = getDisplayName(info.machine || '')
+          const displayName = info.machine || ''
           setDeviceName(displayName || host)
           setShowSaveDeviceDialog(true)
         }
@@ -1712,13 +1707,6 @@ export default function App() {
     window.go.main.App.UninstallVellum(removeAllPackages)
   }
 
-  const getDisplayName = (machine: string) => {
-    if (machine.includes('reMarkable 1')) return 'reMarkable 1'
-    if (machine.includes('reMarkable 2')) return 'reMarkable 2'
-    if (machine.includes('Ferrari')) return 'Paper Pro'
-    if (machine.includes('Chiappa')) return 'Paper Pro Move'
-    return machine
-  }
 
   const getConflict = (pkg: PackageInfo): string | null => {
     for (const conflict of pkg.conflicts) {
@@ -2116,7 +2104,7 @@ export default function App() {
           <div className="flex items-center gap-2 text-sm">
             {device && deviceInfo.firmware && (
               <span className="text-muted-foreground">
-                {getDisplayName(deviceInfo.machine || device)} ({deviceInfo.firmware})
+                {deviceInfo.machine || device} ({deviceInfo.firmware})
               </span>
             )}
             <Tooltip>
@@ -2551,7 +2539,7 @@ export default function App() {
 
             {tabVisibility.mods && (
             <TabsContent value="mods">
-              {vellumInstalled === null || (vellumInstalled && !warningsChecked) || (osMismatchDetected && !compatibilityStatus) ? (
+              {vellumInstalled === null || (vellumInstalled && !warningsChecked) ? (
                 <div className="space-y-6">
                   <div className="flex flex-wrap gap-2">
                     <Skeleton className="h-9 flex-1 min-w-[200px]" />
@@ -2628,23 +2616,43 @@ export default function App() {
                   onInstall={() => window.go.main.App.BootstrapVellum()}
                   terminalTheme={resolvedTerminalTheme}
                 />
-              ) : osMismatchDetected && compatibilityStatus ? (
+              ) : osMismatchDetected ? (
                 <div className={uninstallQueue.size > 0 ? 'pb-48' : ''}>
-                  <UpgradeChecklist
-                    storedOsVersion={compatibilityStatus.storedOsVersion || storedOsVersion}
-                    currentOsVersion={compatibilityStatus.currentOsVersion || currentOsVersion}
-                    compatiblePackages={compatibilityStatus.compatiblePackages || []}
-                    incompatiblePackages={compatibilityStatus.incompatiblePackages || []}
-                    loading={checklistLoading}
-                    fetchFailed={compatibilityStatus.fetchFailed || false}
-                    uninstallQueue={uninstallQueue}
-                    onAddToUninstallQueue={addToUninstallQueue}
-                    onRemoveFromUninstallQueue={removeFromUninstallQueue}
-                    onRunUpgrade={handleChecklistUpgrade}
-                    onGoToUtilities={() => setActiveTab('utilities')}
-                    onSelectPackage={handleSelectPackageForOS}
-                    statusMap={compatibilityStatus.statusMap}
-                  />
+                  {compatibilityStatus ? (
+                    <UpgradeChecklist
+                      storedOsVersion={compatibilityStatus.storedOsVersion || storedOsVersion}
+                      currentOsVersion={compatibilityStatus.currentOsVersion || currentOsVersion}
+                      compatiblePackages={compatibilityStatus.compatiblePackages || []}
+                      incompatiblePackages={compatibilityStatus.incompatiblePackages || []}
+                      loading={checklistLoading}
+                      fetchFailed={compatibilityStatus.fetchFailed || false}
+                      uninstallQueue={uninstallQueue}
+                      onAddToUninstallQueue={addToUninstallQueue}
+                      onRemoveFromUninstallQueue={removeFromUninstallQueue}
+                      onRunUpgrade={handleChecklistUpgrade}
+                      onGoToUtilities={() => setActiveTab('utilities')}
+                      onSelectPackage={handleSelectPackageForOS}
+                      statusMap={compatibilityStatus.statusMap}
+                    />
+                  ) : (
+                    <Card>
+                      <CardHeader>
+                        <div className="flex items-center gap-2">
+                          <AlertTriangle className="h-5 w-5 text-yellow-500" />
+                          <CardTitle>OS Change Detected</CardTitle>
+                        </div>
+                        <CardDescription>
+                          Your reMarkable OS has changed from {storedOsVersion} to {currentOsVersion}.
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          Checking package compatibility...
+                        </div>
+                      </CardContent>
+                    </Card>
+                  )}
                 </div>
               ) : (
               <div className={`space-y-6 ${(installQueue.size > 0 || uninstallQueue.size > 0) ? 'pb-48' : ''}`}>
@@ -4114,7 +4122,7 @@ export default function App() {
                 id="deviceName"
                 value={deviceName}
                 onChange={(e) => setDeviceName(e.target.value)}
-                placeholder={getDisplayName(deviceInfo.machine || '') || 'My reMarkable'}
+                placeholder={deviceInfo.machine || 'My reMarkable'}
               />
             </div>
             {saveDeviceError && (
@@ -4297,7 +4305,7 @@ export default function App() {
                 <div className="flex items-center gap-2 text-sm">
                   {device && deviceInfo.firmware && (
                     <span className="text-muted-foreground">
-                      {getDisplayName(deviceInfo.machine || device)} ({deviceInfo.firmware})
+                      {deviceInfo.machine || device} ({deviceInfo.firmware})
                     </span>
                   )}
                   <Tooltip>
@@ -4350,7 +4358,7 @@ export default function App() {
                 <div className="flex items-center gap-2 text-sm">
                   {device && deviceInfo.firmware && (
                     <span className="text-muted-foreground">
-                      {getDisplayName(deviceInfo.machine || device)} ({deviceInfo.firmware})
+                      {deviceInfo.machine || device} ({deviceInfo.firmware})
                     </span>
                   )}
                   <Tooltip>
