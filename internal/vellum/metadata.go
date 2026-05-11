@@ -99,6 +99,7 @@ type Package struct {
 	DonateURL           *string
 	ReadmeURL           *string
 	Compatible          bool
+	IncompatibleReason  string
 	MaintenanceCommands []MaintenanceCommand
 	Hooks               *PackageHooks
 }
@@ -354,12 +355,28 @@ func (m *MetadataStore) GetAllPackagesForDevice(deviceType, firmware, arch strin
 			}
 		}
 
+		var incompatibleReason string
+
 		if bestVersion == "" {
 			compatible = false
 			for version, info := range versions {
 				if !isVersionCompatible(info, deviceType, "", arch) {
 					continue
 				}
+				if bestVersion == "" || compareVersions(version, bestVersion) > 0 {
+					bestVersion = version
+					bestInfo = info
+				}
+			}
+			if bestVersion != "" {
+				incompatibleReason = "os"
+			}
+		}
+
+		if bestVersion == "" {
+			compatible = false
+			incompatibleReason = "device"
+			for version, info := range versions {
 				if bestVersion == "" || compareVersions(version, bestVersion) > 0 {
 					bestVersion = version
 					bestInfo = info
@@ -375,28 +392,30 @@ func (m *MetadataStore) GetAllPackagesForDevice(deviceType, firmware, arch strin
 			visited := map[string]bool{}
 			if !m.depsInstallable(name, deviceType, firmware, arch, visited) {
 				compatible = false
+				incompatibleReason = "os"
 			}
 		}
 
 		pkg := Package{
-			Name:           name,
-			Version:        bestVersion,
-			Description:    bestInfo.Pkgdesc,
-			UpstreamAuthor: bestInfo.UpstreamAuthor,
-			Categories:     bestInfo.Categories,
-			License:        bestInfo.License,
-			URL:            bestInfo.URL,
-			OSMin:          bestInfo.OSMin,
-			OSMax:          bestInfo.OSMax,
-			OSConstraints:  bestInfo.OSConstraints,
-			Devices:        bestInfo.Devices,
-			Depends:        bestInfo.Depends,
-			Conflicts:      bestInfo.Conflicts,
-			Arch:           bestInfo.Arch,
-			Status:         bestInfo.Status,
-			DonateURL:      bestInfo.DonateURL,
-			ReadmeURL:      bestInfo.ReadmeURL,
-			Compatible:     compatible,
+			Name:               name,
+			Version:            bestVersion,
+			Description:        bestInfo.Pkgdesc,
+			UpstreamAuthor:     bestInfo.UpstreamAuthor,
+			Categories:         bestInfo.Categories,
+			License:            bestInfo.License,
+			URL:                bestInfo.URL,
+			OSMin:              bestInfo.OSMin,
+			OSMax:              bestInfo.OSMax,
+			OSConstraints:      bestInfo.OSConstraints,
+			Devices:            bestInfo.Devices,
+			Depends:            bestInfo.Depends,
+			Conflicts:          bestInfo.Conflicts,
+			Arch:               bestInfo.Arch,
+			Status:             bestInfo.Status,
+			DonateURL:          bestInfo.DonateURL,
+			ReadmeURL:          bestInfo.ReadmeURL,
+			Compatible:         compatible,
+			IncompatibleReason: incompatibleReason,
 		}
 
 		if rmInfo, ok := m.remanager.Packages[name]; ok {

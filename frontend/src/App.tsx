@@ -58,6 +58,7 @@ interface PackageInfo {
   osMax: string | null
   osConstraints: { version: string; operator: '>=' | '<' | '>' | '<=' | '=' }[] | null
   compatible: boolean
+  incompatibleReason?: string
   status: string
   donateUrl: string | null
   readmeUrl: string | null
@@ -2790,7 +2791,7 @@ export default function App() {
                                 return !pkg.compatible ? (
                                   <Tooltip key={pkg.name}>
                                     <TooltipTrigger asChild>{row}</TooltipTrigger>
-                                    <TooltipContent>Does not support your current OS</TooltipContent>
+                                    <TooltipContent>{pkg.incompatibleReason === 'device' ? 'Does not support your reMarkable model' : 'Does not support your current OS'}</TooltipContent>
                                   </Tooltip>
                                 ) : row
                               })}
@@ -2859,7 +2860,7 @@ export default function App() {
                                           </Button>
                                         </span>
                                       </TooltipTrigger>
-                                      <TooltipContent>Does not support your current OS</TooltipContent>
+                                      <TooltipContent>{pkg.incompatibleReason === 'device' ? 'Does not support your reMarkable model' : 'Does not support your current OS'}</TooltipContent>
                                     </Tooltip>
                                   ) : isQueued ? (
                                     <Button

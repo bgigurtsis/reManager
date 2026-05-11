@@ -1969,8 +1969,9 @@ type PackageInfo struct {
 	OSMin          *string               `json:"osMin"`
 	OSMax          *string               `json:"osMax"`
 	OSConstraints  []vellum.OSConstraint `json:"osConstraints"`
-	Compatible     bool                  `json:"compatible"`
-	Status         string                `json:"status"`
+	Compatible         bool                  `json:"compatible"`
+	IncompatibleReason string                `json:"incompatibleReason,omitempty"`
+	Status             string                `json:"status"`
 	DonateURL      *string               `json:"donateUrl"`
 	ReadmeURL      *string               `json:"readmeUrl"`
 }
@@ -2025,8 +2026,9 @@ func (a *App) GetPackages(deviceType, firmware, arch string) []PackageInfo {
 			OSMin:          pkg.OSMin,
 			OSMax:          pkg.OSMax,
 			OSConstraints:  pkg.OSConstraints,
-			Compatible:     pkg.Compatible,
-			Status:         pkg.Status,
+			Compatible:         pkg.Compatible,
+			IncompatibleReason: pkg.IncompatibleReason,
+			Status:             pkg.Status,
 			DonateURL:      pkg.DonateURL,
 			ReadmeURL:      pkg.ReadmeURL,
 		})

@@ -24,6 +24,7 @@ interface PackageInfo {
   osMax: string | null
   osConstraints: OSConstraint[] | null
   compatible: boolean
+  incompatibleReason?: string
   status: string
   donateUrl: string | null
   readmeUrl: string | null
@@ -333,7 +334,7 @@ export function PackageDetailPanel({
           ) : !isOsCompatible ? (
             <Button className="w-full" disabled>
               <AlertTriangle className="h-4 w-4 mr-2" />
-              Not compatible with {firmware}
+              {pkg.incompatibleReason === 'device' ? 'Does not support your reMarkable model' : `Not compatible with ${firmware}`}
             </Button>
           ) : conflict ? (
             <Button className="w-full" disabled>
