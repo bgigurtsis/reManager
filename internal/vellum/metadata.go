@@ -45,6 +45,9 @@ type PackageVersion struct {
 	Depends        []string       `json:"depends"`
 	Conflicts      []string       `json:"conflicts"`
 	Arch           []string       `json:"arch"`
+	Status         string         `json:"status"`
+	DonateURL      *string        `json:"donateurl"`
+	ReadmeURL      *string        `json:"readmeurl"`
 }
 
 type PackagesMetadata struct {
@@ -92,6 +95,9 @@ type Package struct {
 	Depends             []string
 	Conflicts           []string
 	Arch                []string
+	Status              string
+	DonateURL           *string
+	ReadmeURL           *string
 	Compatible          bool
 	MaintenanceCommands []MaintenanceCommand
 	Hooks               *PackageHooks
@@ -245,6 +251,9 @@ func (m *MetadataStore) GetAllPackages() []Package {
 			Depends:        latestInfo.Depends,
 			Conflicts:      latestInfo.Conflicts,
 			Arch:           latestInfo.Arch,
+			Status:         latestInfo.Status,
+			DonateURL:      latestInfo.DonateURL,
+			ReadmeURL:      latestInfo.ReadmeURL,
 		}
 
 		if rmInfo, ok := m.remanager.Packages[name]; ok {
@@ -291,6 +300,9 @@ func (m *MetadataStore) GetPackage(name string) *Package {
 		Depends:        latestInfo.Depends,
 		Conflicts:      latestInfo.Conflicts,
 		Arch:           latestInfo.Arch,
+		Status:         latestInfo.Status,
+		DonateURL:      latestInfo.DonateURL,
+		ReadmeURL:      latestInfo.ReadmeURL,
 	}
 
 	if rmInfo, ok := m.remanager.Packages[name]; ok {
@@ -381,6 +393,9 @@ func (m *MetadataStore) GetAllPackagesForDevice(deviceType, firmware, arch strin
 			Depends:        bestInfo.Depends,
 			Conflicts:      bestInfo.Conflicts,
 			Arch:           bestInfo.Arch,
+			Status:         bestInfo.Status,
+			DonateURL:      bestInfo.DonateURL,
+			ReadmeURL:      bestInfo.ReadmeURL,
 			Compatible:     compatible,
 		}
 
@@ -436,6 +451,9 @@ func (m *MetadataStore) GetPackageForTargetOS(name, targetOS, deviceType, arch s
 		Depends:        bestInfo.Depends,
 		Conflicts:      bestInfo.Conflicts,
 		Arch:           bestInfo.Arch,
+		Status:         bestInfo.Status,
+		DonateURL:      bestInfo.DonateURL,
+		ReadmeURL:      bestInfo.ReadmeURL,
 	}
 
 	if rmInfo, ok := m.remanager.Packages[name]; ok {

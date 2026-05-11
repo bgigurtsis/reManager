@@ -6,6 +6,7 @@ import { Label } from '@/components/ui/label'
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
 import { Loader2, Check, X, AlertCircle } from 'lucide-react'
 import { Alert, AlertDescription } from '@/components/ui/alert'
+import { StatusBadge } from '@/components/StatusBadge'
 
 interface CheckOSDialogProps {
   open: boolean
@@ -20,6 +21,7 @@ interface CompatibilityResult {
   incompatible: string[]
   noConstraint: string[]
   fetchFailed: boolean
+  statusMap: Record<string, string>
 }
 
 export function CheckOSDialog({
@@ -158,6 +160,7 @@ export function CheckOSDialog({
                             >
                               {pkg}
                             </button>
+                            {result?.statusMap?.[pkg] && <StatusBadge status={result.statusMap[pkg]} />}
                           </div>
                         ))}
                       </div>
@@ -181,6 +184,7 @@ export function CheckOSDialog({
                             >
                               {pkg}
                             </button>
+                            {result?.statusMap?.[pkg] && <StatusBadge status={result.statusMap[pkg]} />}
                           </div>
                         ))}
                       </div>

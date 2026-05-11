@@ -19,6 +19,8 @@ import { PackageDetailPanel } from '@/components/PackageDetailPanel'
 import { ConsolidatedWarningBanner, hasActiveWarnings } from '@/components/ConsolidatedWarningBanner'
 import { BannerSwitcher } from '@/components/BannerSwitcher'
 import { UpgradeChecklist } from '@/components/UpgradeChecklist'
+import { StatusBadge } from '@/components/StatusBadge'
+import { ReadmeDialog } from '@/components/ReadmeDialog'
 import { VellumInstallPrompt } from '@/components/VellumInstallPrompt'
 import { VellumInstallSuccessDialog } from '@/components/VellumInstallSuccessDialog'
 import { VellumUninstallSuccessDialog } from '@/components/VellumUninstallSuccessDialog'
@@ -56,6 +58,9 @@ interface PackageInfo {
   osMax: string | null
   osConstraints: { version: string; operator: '>=' | '<' | '>' | '<=' | '=' }[] | null
   compatible: boolean
+  status: string
+  donateUrl: string | null
+  readmeUrl: string | null
 }
 
 interface MaintenanceCommandInfo {
@@ -443,7 +448,11 @@ export default function App() {
   const [lastOperationType, setLastOperationType] = useState<'install' | 'uninstall' | null>(null)
   const [selectedPackage, setSelectedPackage] = useState<PackageInfo | null>(null)
   const [sidebarViewOnly, setSidebarViewOnly] = useState(false)
+  const [readmeDialogOpen, setReadmeDialogOpen] = useState(false)
+  const [readmeUrl, setReadmeUrl] = useState<string | null>(null)
+  const [readmePackageName, setReadmePackageName] = useState('')
   const [sidebarIncompatible, setSidebarIncompatible] = useState(false)
+  const [sidebarHistory, setSidebarHistory] = useState<PackageInfo[]>([])
   const [pendingInstallConfirm, setPendingInstallConfirm] = useState<{
     packages: string[]
     requested: string[]
@@ -484,6 +493,7 @@ export default function App() {
     currentOsVersion: string
     storedOsVersion: string
     fetchFailed: boolean
+    statusMap?: Record<string, string>
   } | null>(null)
 
   const [hashtabMismatch, setHashtabMismatch] = useState<HashtabVersionStatus | null>(null)
@@ -1858,6 +1868,17 @@ export default function App() {
     }
   }
 
+  const handleViewReadme = (url: string) => {
+    const isMarkdown = url.endsWith('.md') || new URL(url).hostname === 'raw.githubusercontent.com'
+    if (isMarkdown) {
+      setReadmeUrl(url)
+      setReadmePackageName(selectedPackage?.name || '')
+      setReadmeDialogOpen(true)
+    } else {
+      window.runtime.BrowserOpenURL(url)
+    }
+  }
+
   const handleSelectPackageForOS = async (name: string, targetOS: string, isCompatible: boolean = true) => {
     try {
       const arch = await window.go.main.App.GetDeviceArchitecture(device)
@@ -2621,6 +2642,7 @@ export default function App() {
                     onRunUpgrade={handleChecklistUpgrade}
                     onGoToUtilities={() => setActiveTab('utilities')}
                     onSelectPackage={handleSelectPackageForOS}
+                    statusMap={compatibilityStatus.statusMap}
                   />
                 </div>
               ) : (
@@ -2721,7 +2743,10 @@ export default function App() {
                                   >
                                     {viewMode === 'compact' ? (
                                       <div className="flex items-center gap-2">
-                                        <span className="font-medium w-[120px] md:w-[160px] lg:w-[200px] xl:w-[240px] shrink-0 truncate">{pkg.name}</span>
+                                        <div className="w-[120px] md:w-[160px] lg:w-[200px] xl:w-[240px] shrink-0">
+                                          <span className="font-medium truncate block">{pkg.name}</span>
+                                          <StatusBadge status={pkg.status} />
+                                        </div>
                                         <span className="text-sm text-muted-foreground truncate">{pkg.description}</span>
                                       </div>
                                     ) : (
@@ -2729,6 +2754,7 @@ export default function App() {
                                         <div className="flex items-center gap-2">
                                           <span className="font-medium">{pkg.name}</span>
                                           {(pkg.categories || []).map(cat => <Badge key={cat} variant="outline">{cat}</Badge>)}
+                                          <StatusBadge status={pkg.status} />
                                         </div>
                                         <p className="text-sm text-muted-foreground mt-1">{pkg.description}</p>
                                         {pkg.upstreamAuthor && (
@@ -2798,7 +2824,10 @@ export default function App() {
                                   >
                                     {viewMode === 'compact' ? (
                                       <div className="flex items-center gap-2">
-                                        <span className="font-medium w-[120px] md:w-[160px] lg:w-[200px] xl:w-[240px] shrink-0 truncate">{pkg.name}</span>
+                                        <div className="w-[120px] md:w-[160px] lg:w-[200px] xl:w-[240px] shrink-0">
+                                          <span className="font-medium truncate block">{pkg.name}</span>
+                                          <StatusBadge status={pkg.status} />
+                                        </div>
                                         <span className="text-sm text-muted-foreground truncate">{pkg.description}</span>
                                       </div>
                                     ) : (
@@ -2806,6 +2835,7 @@ export default function App() {
                                         <div className="flex items-center gap-2">
                                           <span className="font-medium">{pkg.name}</span>
                                           {(pkg.categories || []).map(cat => <Badge key={cat} variant="outline">{cat}</Badge>)}
+                                          <StatusBadge status={pkg.status} />
                                         </div>
                                         <p className="text-sm text-muted-foreground mt-1">{pkg.description}</p>
                                         {pkg.upstreamAuthor && (
@@ -4108,7 +4138,7 @@ export default function App() {
 
 
       {/* Package Detail Side Panel */}
-      <Sheet open={selectedPackage !== null} onOpenChange={(open) => { if (!open) { setSelectedPackage(null); setSidebarViewOnly(false); setSidebarIncompatible(false) } }}>
+      <Sheet open={selectedPackage !== null} onOpenChange={(open) => { if (!open) { setSelectedPackage(null); setSidebarViewOnly(false); setSidebarIncompatible(false); setSidebarHistory([]) } }}>
         <SheetContent side="right" className="w-[400px] sm:w-[450px] sm:max-w-none flex flex-col">
           {selectedPackage && (
             <PackageDetailPanel
@@ -4130,6 +4160,7 @@ export default function App() {
               onSelectPackage={(name) => {
                 const pkg = packages.find(p => p.name === name)
                 if (pkg) {
+                  if (selectedPackage) setSidebarHistory(h => [...h, selectedPackage])
                   setSidebarViewOnly(false)
                   setSidebarIncompatible(false)
                   setSelectedPackage(pkg)
@@ -4141,10 +4172,25 @@ export default function App() {
               isOsCompatible={selectedPackage.compatible}
               viewOnly={sidebarViewOnly}
               showIncompatible={sidebarIncompatible}
+              onViewReadme={handleViewReadme}
+              onBack={sidebarHistory.length > 0 ? () => {
+                const prev = sidebarHistory[sidebarHistory.length - 1]
+                setSidebarHistory(h => h.slice(0, -1))
+                setSelectedPackage(prev)
+                setSidebarViewOnly(false)
+                setSidebarIncompatible(false)
+              } : undefined}
             />
           )}
         </SheetContent>
       </Sheet>
+
+      <ReadmeDialog
+        open={readmeDialogOpen}
+        onOpenChange={setReadmeDialogOpen}
+        url={readmeUrl}
+        packageName={readmePackageName}
+      />
 
       <SettingsDialog
         open={showSettingsDialog}

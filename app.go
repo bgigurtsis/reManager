@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -1969,6 +1970,9 @@ type PackageInfo struct {
 	OSMax          *string               `json:"osMax"`
 	OSConstraints  []vellum.OSConstraint `json:"osConstraints"`
 	Compatible     bool                  `json:"compatible"`
+	Status         string                `json:"status"`
+	DonateURL      *string               `json:"donateUrl"`
+	ReadmeURL      *string               `json:"readmeUrl"`
 }
 
 var hiddenPackages = map[string]bool{
@@ -2022,6 +2026,9 @@ func (a *App) GetPackages(deviceType, firmware, arch string) []PackageInfo {
 			OSMax:          pkg.OSMax,
 			OSConstraints:  pkg.OSConstraints,
 			Compatible:     pkg.Compatible,
+			Status:         pkg.Status,
+			DonateURL:      pkg.DonateURL,
+			ReadmeURL:      pkg.ReadmeURL,
 		})
 	}
 
@@ -2126,7 +2133,38 @@ func (a *App) GetPackageForOS(name, targetOS, deviceType, arch string) *PackageI
 		OSMin:          pkg.OSMin,
 		OSMax:          pkg.OSMax,
 		OSConstraints:  pkg.OSConstraints,
+		Status:         pkg.Status,
+		DonateURL:      pkg.DonateURL,
+		ReadmeURL:      pkg.ReadmeURL,
 	}
+}
+
+func (a *App) GetReadmeContent(url string) (string, error) {
+	parsed, err := neturl.Parse(url)
+	if err != nil {
+		return "", fmt.Errorf("invalid URL: %w", err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", fmt.Errorf("unsupported URL scheme: %s", parsed.Scheme)
+	}
+
+	client := httputil.NewClient(10 * time.Second)
+	resp, err := client.Get(url)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 512*1024))
+	if err != nil {
+		return "", err
+	}
+
+	return string(body), nil
 }
 
 func (a *App) RunReenable() {
@@ -2262,10 +2300,11 @@ func (a *App) GetOSVersionState() OSVersionStateResult {
 }
 
 type CompatibilityResultJSON struct {
-	Compatible   []string `json:"compatible"`
-	Incompatible []string `json:"incompatible"`
-	NoConstraint []string `json:"noConstraint"`
-	FetchFailed  bool     `json:"fetchFailed"`
+	Compatible   []string          `json:"compatible"`
+	Incompatible []string          `json:"incompatible"`
+	NoConstraint []string          `json:"noConstraint"`
+	FetchFailed  bool              `json:"fetchFailed"`
+	StatusMap    map[string]string `json:"statusMap"`
 }
 
 func (a *App) CheckOSCompatibility(targetOS string) CompatibilityResultJSON {
@@ -2278,11 +2317,20 @@ func (a *App) CheckOSCompatibility(targetOS string) CompatibilityResultJSON {
 		return CompatibilityResultJSON{FetchFailed: true}
 	}
 
+	statusMap := make(map[string]string)
+	for _, name := range append(append(result.Compatible, result.Incompatible...), result.NoConstraint...) {
+		pkg := a.metadata.GetPackage(name)
+		if pkg != nil && pkg.Status != "" && pkg.Status != "maintained" {
+			statusMap[name] = pkg.Status
+		}
+	}
+
 	return CompatibilityResultJSON{
 		Compatible:   result.Compatible,
 		Incompatible: result.Incompatible,
 		NoConstraint: result.NoConstraint,
 		FetchFailed:  result.FetchFailed,
+		StatusMap:    statusMap,
 	}
 }
 
@@ -2293,6 +2341,7 @@ type PackageCompatibilityStatus struct {
 	CurrentOsVersion     string            `json:"currentOsVersion"`
 	StoredOsVersion      string            `json:"storedOsVersion"`
 	FetchFailed          bool              `json:"fetchFailed"`
+	StatusMap            map[string]string `json:"statusMap"`
 }
 
 func (a *App) GetPackageCompatibilityStatus() PackageCompatibilityStatus {
@@ -2350,6 +2399,14 @@ func (a *App) GetPackageCompatibilityStatus() PackageCompatibilityStatus {
 		}
 	}
 
+	statusMap := make(map[string]string)
+	for _, name := range append(append(compat.Compatible, compat.Incompatible...), compat.NoConstraint...) {
+		pkg := a.metadata.GetPackage(name)
+		if pkg != nil && pkg.Status != "" && pkg.Status != "maintained" {
+			statusMap[name] = pkg.Status
+		}
+	}
+
 	result := PackageCompatibilityStatus{
 		InstalledPackages:    filteredInstalled,
 		CompatiblePackages:   append(compat.Compatible, compat.NoConstraint...),
@@ -2357,6 +2414,7 @@ func (a *App) GetPackageCompatibilityStatus() PackageCompatibilityStatus {
 		CurrentOsVersion:     osState.CurrentVersion,
 		StoredOsVersion:      osState.StoredVersion,
 		FetchFailed:          false,
+		StatusMap:            statusMap,
 	}
 	debug.Printf("[DEBUG] GetPackageCompatibilityStatus: returning result=%+v\n", result)
 	return result
