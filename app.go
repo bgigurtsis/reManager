@@ -499,7 +499,7 @@ func (a *App) BootstrapVellum() {
 			a.vellumClient = vellum.NewClient(&wailsExecutor{app: a})
 		}
 
-		_, arch, err := a.detectDevice()
+		_, arch, _, err := a.detectDevice()
 		if err != nil {
 			runtime.EventsEmit(a.ctx, "vellum:bootstrap-error", fmt.Sprintf("Failed to detect device: %v", err))
 			return
@@ -841,7 +841,7 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 	}
 
 	debug.Println("[DEBUG] Detecting device...")
-	deviceType, deviceArch, err := a.detectDevice()
+	deviceType, deviceArch, firmware, err := a.detectDevice()
 	debug.Printf("[DEBUG] Device detected: %s (%s), err: %v\n", deviceType, deviceArch, err)
 	if err != nil {
 		return ConnectionResult{
@@ -1076,7 +1076,6 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 		}
 	}()
 
-	firmware := a.readFirmwareVersion()
 	a.mu.Lock()
 	a.connectedDeviceType = deviceType
 	a.connectedDeviceArch = deviceArch
@@ -1090,48 +1089,37 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 	}
 }
 
-func (a *App) detectDevice() (rmdevice.Type, rmdevice.Architecture, error) {
+func (a *App) detectDevice() (rmdevice.Type, rmdevice.Architecture, string, error) {
 	a.mu.Lock()
 	client := a.client
 	a.mu.Unlock()
 
 	if client == nil {
-		return rmdevice.Unknown, "", fmt.Errorf("not connected")
+		return rmdevice.Unknown, "", "", fmt.Errorf("not connected")
 	}
 
 	fs, err := rmfilesystem.NewSSH(client)
 	if err != nil {
-		return rmdevice.Unknown, "", fmt.Errorf("failed to create filesystem: %w", err)
+		return rmdevice.Unknown, "", "", fmt.Errorf("failed to create filesystem: %w", err)
 	}
 	defer fs.Close()
 
 	deviceType, err := rmdevice.Detect(fs)
 	if err != nil {
-		return rmdevice.Unknown, "", fmt.Errorf("failed to detect device: %w", err)
+		return rmdevice.Unknown, "", "", fmt.Errorf("failed to detect device: %w", err)
 	}
 
 	exec := rmexecutor.NewSSH(client)
 	arch, err := rmdevice.DetectArchitecture(exec)
 	if err != nil {
-		return deviceType, "", fmt.Errorf("failed to detect architecture: %w", err)
+		return deviceType, "", "", fmt.Errorf("failed to detect architecture: %w", err)
 	}
 
-	return deviceType, arch, nil
+	firmware, _ := rmdevice.DetectVersion(fs)
+
+	return deviceType, arch, firmware, nil
 }
 
-func (a *App) readFirmwareVersion() string {
-	if output, err := a.runCommand("grep REMARKABLE_RELEASE_VERSION /usr/share/remarkable/update.conf"); err == nil {
-		if parts := strings.SplitN(output, "=", 2); len(parts) == 2 {
-			return strings.TrimSpace(parts[1])
-		}
-	}
-	if output, err := a.runCommand("grep IMG_VERSION /etc/os-release"); err == nil {
-		if parts := strings.SplitN(output, "=", 2); len(parts) == 2 {
-			return strings.Trim(strings.TrimSpace(parts[1]), "\"")
-		}
-	}
-	return ""
-}
 
 
 func (a *App) Disconnect() {
