@@ -2234,7 +2234,7 @@ export default function App() {
                   <CardDescription>
                     Find your IP and password in Settings - General - Help - Copyrights and licenses.
                     <br />
-                    Paper Pro and Paper Pro Move require{' '}
+                    Paper Pro, Paper Pro Move, and Paper Pure require{' '}
                     <button
                       onClick={() => window.runtime.BrowserOpenURL('https://support.remarkable.com/s/article/Developer-mode')}
                       className="underline hover:text-foreground">

@@ -104,6 +104,34 @@ type Package struct {
 	Hooks               *PackageHooks
 }
 
+var deviceAliases = map[string]string{
+	"rmppm": "rmppmove",
+}
+
+func normalizeDevices(devices []string) []string {
+	seen := make(map[string]bool, len(devices))
+	out := make([]string, 0, len(devices))
+	for _, d := range devices {
+		if alias, ok := deviceAliases[d]; ok {
+			d = alias
+		}
+		if !seen[d] {
+			seen[d] = true
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+func normalizePackagesMetadata(pm *PackagesMetadata) {
+	for _, versions := range pm.Packages {
+		for ver, info := range versions {
+			info.Devices = normalizeDevices(info.Devices)
+			versions[ver] = info
+		}
+	}
+}
+
 type MetadataStore struct {
 	mu        sync.RWMutex
 	packages  PackagesMetadata
@@ -121,6 +149,7 @@ func (m *MetadataStore) Load() error {
 			return fmt.Errorf("failed to parse fallback packages metadata: %w", err)
 		}
 	}
+	normalizePackagesMetadata(&m.packages)
 	debug.Printf("[DEBUG] Loaded %d packages from metadata\n", len(m.packages.Packages))
 
 	if err := m.loadRemanagerMetadata(); err != nil {
@@ -169,6 +198,8 @@ func (m *MetadataStore) Refresh() error {
 			}
 		}
 	}
+
+	normalizePackagesMetadata(&newPackages)
 
 	m.mu.Lock()
 	m.packages = newPackages
@@ -528,7 +559,7 @@ func isVersionCompatible(info PackageVersion, deviceType, firmware, arch string)
 	if deviceType != "" && len(info.Devices) > 0 {
 		found := false
 		for _, d := range info.Devices {
-			if d == deviceType || (deviceType == "rmppmove" && d == "rmppm") {
+			if d == deviceType {
 				found = true
 				break
 			}

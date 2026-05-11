@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	rmdevice "github.com/rmitchellscott/remarkable-go/device"
+
 	"reManager/internal/component"
 )
 
@@ -115,14 +117,17 @@ func RunCommand(cmd string, description string) component.CommandResult {
 	}
 }
 
-func GetArchiveArch(arch component.DeviceArchitecture) string {
-	if arch == component.ArchArm32 {
+func GetArchiveArch(arch rmdevice.Architecture) string {
+	if arch == rmdevice.Arm32 {
 		return "arm32-testing"
 	}
 	return "aarch64"
 }
 
-func GetDownloadArch(arch component.DeviceArchitecture) string {
+func GetDownloadArch(arch rmdevice.Architecture) string {
+	if arch == rmdevice.Arm32 {
+		return "armv7"
+	}
 	return string(arch)
 }
 
@@ -140,8 +145,8 @@ func MakeWriteable() []component.CommandResult {
 	}
 }
 
-func WrapWithWriteableRoot(commands []component.CommandResult, device component.DeviceType) []component.CommandResult {
-	if device == component.DeviceRMPP || device == component.DeviceRMPPMove || device == component.DeviceRMPPure {
+func WrapWithWriteableRoot(commands []component.CommandResult, dev rmdevice.Type) []component.CommandResult {
+	if dev.IsPaperPro() {
 		before := []component.CommandResult{
 			{
 				Script:      `echo "[DEBUG] Current root mount state:" && grep ' / ' /proc/mounts && echo "[DEBUG] Checking if root is rw..." && if grep -q ' / .*\brw\b' /proc/mounts; then echo "[DEBUG] Root is already rw"; else echo "[DEBUG] Remounting root as rw..." && mount -o remount,rw / && echo "[DEBUG] Root remounted as rw"; fi && sleep 1`,

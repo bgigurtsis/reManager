@@ -185,7 +185,8 @@ type App struct {
 
 	keepaliveStop          chan struct{}
 	connectedDeviceID      string
-	connectedDeviceType    string
+	connectedDeviceType    rmdevice.Type
+	connectedDeviceArch    rmdevice.Architecture
 	writeableRootBusy      bool
 	reconnecting           bool
 	reconnectMu            sync.Mutex
@@ -497,13 +498,11 @@ func (a *App) BootstrapVellum() {
 			a.vellumClient = vellum.NewClient(&wailsExecutor{app: a})
 		}
 
-		deviceType, err := a.detectDevice()
+		_, arch, err := a.detectDevice()
 		if err != nil {
 			runtime.EventsEmit(a.ctx, "vellum:bootstrap-error", fmt.Sprintf("Failed to detect device: %v", err))
 			return
 		}
-
-		arch := device.GetArchitecture(component.DeviceType(deviceType))
 
 		runtime.EventsEmit(a.ctx, "vellum:bootstrap-start", nil)
 
@@ -841,8 +840,8 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 	}
 
 	debug.Println("[DEBUG] Detecting device...")
-	deviceType, err := a.detectDevice()
-	debug.Printf("[DEBUG] Device detected: %s, err: %v\n", deviceType, err)
+	deviceType, deviceArch, err := a.detectDevice()
+	debug.Printf("[DEBUG] Device detected: %s (%s), err: %v\n", deviceType, deviceArch, err)
 	if err != nil {
 		return ConnectionResult{
 			Success: true,
@@ -956,8 +955,7 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 				sshClient := a.client
 				a.mu.Unlock()
 				if sshClient != nil {
-					arch := device.GetArchitecture(component.DeviceType(deviceType))
-					proxy := vellum.NewProxy(vc, sshClient, string(arch))
+					proxy := vellum.NewProxy(vc, sshClient, string(deviceArch))
 					_ = proxy.UploadAPKINDEX(func(msg string) {
 						debug.Printf("[DEBUG] Upgrade check APKINDEX: %s\n", msg)
 					})
@@ -1041,36 +1039,43 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 
 	a.mu.Lock()
 	a.connectedDeviceType = deviceType
+	a.connectedDeviceArch = deviceArch
 	a.mu.Unlock()
 
 	return ConnectionResult{
 		Success: true,
 		Message: "Connected successfully",
-		Device:  deviceType,
+		Device:  string(deviceType),
 	}
 }
 
-func (a *App) detectDevice() (string, error) {
-	output, err := a.runCommand("cat /sys/devices/soc0/machine")
-	if err != nil {
-		return "", err
+func (a *App) detectDevice() (rmdevice.Type, rmdevice.Architecture, error) {
+	a.mu.Lock()
+	client := a.client
+	a.mu.Unlock()
+
+	if client == nil {
+		return rmdevice.Unknown, "", fmt.Errorf("not connected")
 	}
 
-	machine := strings.TrimSpace(output)
-	switch {
-	case strings.Contains(machine, "reMarkable 1"):
-		return "rm1", nil
-	case strings.Contains(machine, "reMarkable 2"):
-		return "rm2", nil
-	case strings.Contains(machine, "Ferrari"):
-		return "rmpp", nil
-	case strings.Contains(machine, "Chiappa"):
-		return "rmppmove", nil
-	case strings.Contains(machine, "Tatsu"):
-		return "rmppure", nil
-	default:
-		return machine, nil
+	fs, err := rmfilesystem.NewSSH(client)
+	if err != nil {
+		return rmdevice.Unknown, "", fmt.Errorf("failed to create filesystem: %w", err)
 	}
+	defer fs.Close()
+
+	deviceType, err := rmdevice.Detect(fs)
+	if err != nil {
+		return rmdevice.Unknown, "", fmt.Errorf("failed to detect device: %w", err)
+	}
+
+	exec := rmexecutor.NewSSH(client)
+	arch, err := rmdevice.DetectArchitecture(exec)
+	if err != nil {
+		return deviceType, "", fmt.Errorf("failed to detect architecture: %w", err)
+	}
+
+	return deviceType, arch, nil
 }
 
 func (a *App) Disconnect() {
@@ -1092,6 +1097,7 @@ func (a *App) Disconnect() {
 
 	a.connectedDeviceID = ""
 	a.connectedDeviceType = ""
+	a.connectedDeviceArch = ""
 	a.writeableRootBusy = false
 
 	if a.client != nil {
@@ -1111,9 +1117,8 @@ func (a *App) IsConnected() bool {
 	return a.client != nil
 }
 
-func (a *App) acquireWriteableRoot(deviceType string) error {
-	dev := component.DeviceType(deviceType)
-	if dev != component.DeviceRMPP && dev != component.DeviceRMPPMove && dev != component.DeviceRMPPure {
+func (a *App) acquireWriteableRoot(deviceType rmdevice.Type) error {
+	if !deviceType.IsPaperPro() {
 		return nil
 	}
 	a.mu.Lock()
@@ -1126,9 +1131,8 @@ func (a *App) acquireWriteableRoot(deviceType string) error {
 	return nil
 }
 
-func (a *App) releaseWriteableRoot(deviceType string) {
-	dev := component.DeviceType(deviceType)
-	if dev != component.DeviceRMPP && dev != component.DeviceRMPPMove && dev != component.DeviceRMPPure {
+func (a *App) releaseWriteableRoot(deviceType rmdevice.Type) {
+	if !deviceType.IsPaperPro() {
 		return
 	}
 	a.mu.Lock()
@@ -1899,12 +1903,13 @@ func (a *App) SetDeviceTimezone(timezone string, deviceType string) {
 		}
 		a.mu.Unlock()
 
-		if err := a.acquireWriteableRoot(deviceType); err != nil {
+		dev := rmdevice.Type(deviceType)
+		if err := a.acquireWriteableRoot(dev); err != nil {
 			runtime.EventsEmit(a.ctx, "timezone:error", err.Error())
 			runtime.EventsEmit(a.ctx, "command:done", false)
 			return
 		}
-		defer a.releaseWriteableRoot(deviceType)
+		defer a.releaseWriteableRoot(dev)
 
 		cmdResults := []component.CommandResult{
 			{
@@ -1913,8 +1918,7 @@ func (a *App) SetDeviceTimezone(timezone string, deviceType string) {
 			},
 		}
 
-		dev := component.DeviceType(deviceType)
-		if dev == component.DeviceRMPP || dev == component.DeviceRMPPMove || dev == component.DeviceRMPPure {
+		if dev.IsPaperPro() {
 			cmdResults = commands.WrapWithWriteableRoot(cmdResults, dev)
 		}
 
@@ -2231,7 +2235,7 @@ func (a *App) RunPackageUpgrade() {
 		a.mu.Lock()
 		vc := a.vellumClient
 		sshClient := a.client
-		dt := a.connectedDeviceType
+		arch := a.connectedDeviceArch
 		a.mu.Unlock()
 		if vc == nil {
 			return
@@ -2241,7 +2245,6 @@ func (a *App) RunPackageUpgrade() {
 		proxyEnabled := settings == nil || settings.ProxyMode
 
 		if proxyEnabled && sshClient != nil {
-			arch := device.GetArchitecture(component.DeviceType(dt))
 			proxy := vellum.NewProxy(vc, sshClient, string(arch))
 			runtime.EventsEmit(a.ctx, "command:output", "Downloading upgrade packages via reManager...\n")
 			err := proxy.ProxyUpgradeDownload(func(progress vellum.ProxyProgress) {
@@ -2466,11 +2469,10 @@ func (a *App) RunUpgrade() {
 
 		a.mu.Lock()
 		sshClient := a.client
-		dt := a.connectedDeviceType
+		arch := a.connectedDeviceArch
 		a.mu.Unlock()
 
 		if proxyEnabled && sshClient != nil {
-			arch := device.GetArchitecture(component.DeviceType(dt))
 			proxy := vellum.NewProxy(vc, sshClient, string(arch))
 			runtime.EventsEmit(a.ctx, "command:output", "Downloading upgrade packages via reManager...\n")
 			proxyErr := proxy.ProxyUpgradeDownload(func(progress vellum.ProxyProgress) {
@@ -2566,11 +2568,11 @@ func (a *App) GetSystemTasksInfo() []SystemTaskInfo {
 }
 
 func (a *App) GetDeviceDisplayName(machine string) string {
-	return device.GetDisplayName(machine)
+	return a.connectedDeviceType.DisplayName()
 }
 
 func (a *App) GetDeviceArchitecture(deviceType string) string {
-	return string(device.GetArchitecture(component.DeviceType(deviceType)))
+	return commands.GetDownloadArch(a.connectedDeviceArch)
 }
 
 type InstallProgress struct {
@@ -2887,11 +2889,12 @@ func (a *App) InstallPackages(packageNames []string, deviceType string) {
 			a.dialogResponse = nil
 		}()
 
-		arch := device.GetArchitecture(component.DeviceType(deviceType))
+		dev := rmdevice.Type(deviceType)
+		arch := a.connectedDeviceArch
 
 		ctx := component.CommandContext{
 			Arch:   arch,
-			Device: component.DeviceType(deviceType),
+			Device: dev,
 		}
 
 		// Check proxy mode setting
@@ -3047,11 +3050,12 @@ func (a *App) UninstallPackages(packageNames []string, deviceType string) {
 			a.dialogResponse = nil
 		}()
 
-		arch := device.GetArchitecture(component.DeviceType(deviceType))
+		dev := rmdevice.Type(deviceType)
+		arch := a.connectedDeviceArch
 
 		ctx := component.CommandContext{
 			Arch:   arch,
-			Device: component.DeviceType(deviceType),
+			Device: dev,
 		}
 
 		// Simulate uninstall to check for blockers and get full package list
@@ -3184,10 +3188,10 @@ func (a *App) RunMaintenanceCommand(pkgName, commandID, deviceType string) {
 		if cmd.Hook != "" {
 			hookFunc := vellum.GetHook(cmd.Hook)
 			if hookFunc != nil {
-				arch := device.GetArchitecture(component.DeviceType(deviceType))
+				dev := rmdevice.Type(deviceType)
 				ctx := component.CommandContext{
-					Arch:   arch,
-					Device: component.DeviceType(deviceType),
+					Arch:   a.connectedDeviceArch,
+					Device: dev,
 				}
 
 				hookResult, err := hookFunc(ctx)
@@ -3262,22 +3266,22 @@ func (a *App) RunSystemTask(taskID, deviceType string) {
 			return
 		}
 
-		arch := device.GetArchitecture(component.DeviceType(deviceType))
+		dev := rmdevice.Type(deviceType)
 		ctx := component.CommandContext{
-			Arch:   arch,
-			Device: component.DeviceType(deviceType),
+			Arch:   a.connectedDeviceArch,
+			Device: dev,
 		}
 
 		cmdResults := task.Command(ctx)
 
 		if task.NeedsWriteableRoot {
-			cmdResults = commands.WrapWithWriteableRoot(cmdResults, component.DeviceType(deviceType))
-			if err := a.acquireWriteableRoot(deviceType); err != nil {
+			cmdResults = commands.WrapWithWriteableRoot(cmdResults, dev)
+			if err := a.acquireWriteableRoot(dev); err != nil {
 				runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("Blocked: %v\n", err))
 				runtime.EventsEmit(a.ctx, "command:done", false)
 				return
 			}
-			defer a.releaseWriteableRoot(deviceType)
+			defer a.releaseWriteableRoot(dev)
 		}
 
 		var operationErr error
@@ -3774,13 +3778,8 @@ func isSystemPath(path string) bool {
 
 // makeFilesystemWritable makes the root filesystem writable on RMPP/RMPP-M devices
 func (a *App) makeFilesystemWritable(client *ssh.Client) error {
-	deviceType, err := a.detectDevice()
-	if err != nil {
-		return nil // If we can't detect, assume it's not RMPP
-	}
-
-	if deviceType != "rmpp" && deviceType != "rmppmove" && deviceType != "rmppure" {
-		return nil // Only RMPP devices have read-only root
+	if !a.connectedDeviceType.IsPaperPro() {
+		return nil
 	}
 
 	session, err := client.NewSession()
@@ -3800,12 +3799,7 @@ func (a *App) makeFilesystemWritable(client *ssh.Client) error {
 
 // restoreFilesystem restores the /etc overlay and remounts root as read-only on RMPP/RMPP-M
 func (a *App) restoreFilesystem(client *ssh.Client) error {
-	deviceType, err := a.detectDevice()
-	if err != nil {
-		return nil
-	}
-
-	if deviceType != "rmpp" && deviceType != "rmppmove" && deviceType != "rmppure" {
+	if !a.connectedDeviceType.IsPaperPro() {
 		return nil
 	}
 
@@ -3972,7 +3966,7 @@ func (a *App) GetAvailableOSVersions() ([]swupdate.OSVersionInfo, error) {
 		return nil, fmt.Errorf("not connected")
 	}
 
-	return swupdate.ListVersions(deviceType, nil)
+	return swupdate.ListVersions(string(deviceType), nil)
 }
 
 func (a *App) CancelOSInstall() {
@@ -3999,7 +3993,7 @@ func (a *App) InstallOSVersion(version string) {
 			return
 		}
 
-		versions, err := swupdate.ListVersions(deviceType, nil)
+		versions, err := swupdate.ListVersions(string(deviceType), nil)
 		if err != nil {
 			runtime.EventsEmit(a.ctx, "software:install-error", map[string]string{"error": err.Error()})
 			return
