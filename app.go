@@ -1835,7 +1835,7 @@ func (a *App) GetDeviceTimezone() (string, error) {
 		return "", fmt.Errorf("not connected")
 	}
 
-	output, err := a.runCommand("timedatectl show --property=Timezone --value")
+	output, err := a.runCommand("readlink /etc/localtime | sed 's|.*/zoneinfo/||'")
 	if err != nil {
 		return "", fmt.Errorf("failed to get timezone: %w", err)
 	}
@@ -1852,7 +1852,7 @@ func (a *App) GetTimezoneStatus() TimezoneStatus {
 		return status
 	}
 
-	output, err := a.runCommand("timedatectl show --property=Timezone --value")
+	output, err := a.runCommand("readlink /etc/localtime | sed 's|.*/zoneinfo/||'")
 	if err != nil {
 		a.mu.Unlock()
 		return status
