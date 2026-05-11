@@ -322,7 +322,8 @@ func (p *Proxy) ProxyUpgradeDownload(onProgress func(ProxyProgress)) error {
 		"rm1":           true,
 		"rm2":           true,
 		"rmpp":          true,
-		"rmppm":         true,
+		"rmppmove":      true,
+		"rmppure":       true,
 	}
 
 	var pinnedPkgs []proxyPackage

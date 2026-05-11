@@ -19,7 +19,8 @@ var deviceFileNames = map[string]string{
 	"rm1":  "rm1",
 	"rm2":  "rm2",
 	"rmpp": "ferrari",
-	"rmppm": "chiappa",
+	"rmppmove": "chiappa",
+	"rmppure":  "tatsu",
 }
 
 type OSVersionInfo struct {

@@ -607,7 +607,9 @@ func connect() (*ssh.Client, string, error) {
 	case strings.Contains(machine, "Ferrari"):
 		deviceType = "rmpp"
 	case strings.Contains(machine, "Chiappa"):
-		deviceType = "rmppm"
+		deviceType = "rmppmove"
+	case strings.Contains(machine, "Tatsu"):
+		deviceType = "rmppure"
 	default:
 		deviceType = machine
 	}
