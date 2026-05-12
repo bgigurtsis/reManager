@@ -836,8 +836,10 @@ func (a *App) InstallPackages(packageNames []string, deviceType string) {
 
 		a.dialogResponse = make(chan string, 1)
 		defer func() {
-			close(a.dialogResponse)
-			a.dialogResponse = nil
+			if a.dialogResponse != nil {
+				close(a.dialogResponse)
+				a.dialogResponse = nil
+			}
 		}()
 
 		dev := rmdevice.Type(deviceType)
@@ -995,8 +997,10 @@ func (a *App) UninstallPackages(packageNames []string, deviceType string) {
 
 		a.dialogResponse = make(chan string, 1)
 		defer func() {
-			close(a.dialogResponse)
-			a.dialogResponse = nil
+			if a.dialogResponse != nil {
+				close(a.dialogResponse)
+				a.dialogResponse = nil
+			}
 		}()
 
 		dev := rmdevice.Type(deviceType)
@@ -1152,8 +1156,10 @@ func (a *App) RunMaintenanceCommand(pkgName, commandID, deviceType string) {
 				if hookResult != nil && hookResult.DialogConfig != nil {
 					a.dialogResponse = make(chan string, 1)
 					defer func() {
-						close(a.dialogResponse)
-						a.dialogResponse = nil
+						if a.dialogResponse != nil {
+							close(a.dialogResponse)
+							a.dialogResponse = nil
+						}
 					}()
 
 					runtime.EventsEmit(a.ctx, "hook:dialog", dialogRequestFromConfig(hookResult.DialogConfig))
