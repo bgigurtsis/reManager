@@ -29,7 +29,7 @@ interface UseMaintenanceEventsParams {
   checkDnsProxyError: (dnsError: boolean) => Promise<void>
   rescanAllPackages: () => Promise<boolean>
   deviceRef: React.MutableRefObject<string>
-  installedPackagesRef: React.MutableRefObject<Map<string, string>>
+
   selectedTimezoneRef: React.MutableRefObject<string>
   setActiveTab: (v: 'mods' | 'maintenance' | 'utilities') => void
 }
@@ -60,7 +60,7 @@ export function useMaintenanceEvents({
   checkDnsProxyError,
   rescanAllPackages,
   deviceRef,
-  installedPackagesRef,
+
   selectedTimezoneRef,
   setActiveTab,
 }: UseMaintenanceEventsParams) {
@@ -229,7 +229,8 @@ export function useMaintenanceEvents({
         } else {
           setHashtabMismatchRef.current(null)
         }
-        setHashtabMissingRef.current(!hashtabStatus.installed && installedPackagesRef.current.has('qt-resource-rebuilder'))
+        const qtrInstalled = await window.go.main.App.CheckPackageInstalled('qt-resource-rebuilder')
+        setHashtabMissingRef.current(!hashtabStatus.installed && qtrInstalled)
 
         if (tzStatus.needsUpdate) {
           setTimezoneMismatchRef.current(tzStatus)
@@ -372,7 +373,8 @@ export function useMaintenanceEvents({
       } else {
         setHashtabMismatchRef.current(null)
       }
-      setHashtabMissingRef.current(!hashtabStatus.installed && installedPackagesRef.current.has('qt-resource-rebuilder'))
+      const qtrInstalled2 = await window.go.main.App.CheckPackageInstalled('qt-resource-rebuilder')
+      setHashtabMissingRef.current(!hashtabStatus.installed && qtrInstalled2)
       if (tzStatus.needsUpdate) {
         setTimezoneMismatchRef.current(tzStatus)
       } else {

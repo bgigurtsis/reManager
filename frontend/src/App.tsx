@@ -396,8 +396,7 @@ export default function App() {
     }
   }
 
-  const installedPackagesRef = useRef(installedPackages)
-  installedPackagesRef.current = installedPackages
+
 
   const selectedTimezoneRef = useRef(selectedTimezone)
   selectedTimezoneRef.current = selectedTimezone
@@ -443,7 +442,6 @@ export default function App() {
     checkDnsProxyError,
     rescanAllPackages,
     osMismatchDetectedRef,
-    installedPackagesRef,
   })
 
   const {
@@ -488,7 +486,6 @@ export default function App() {
     checkDnsProxyError,
     rescanAllPackages,
     deviceRef,
-    installedPackagesRef,
     selectedTimezoneRef,
     setActiveTab,
   })

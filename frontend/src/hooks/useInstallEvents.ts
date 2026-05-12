@@ -15,7 +15,7 @@ interface UseInstallEventsParams {
   checkDnsProxyError: (dnsError: boolean) => Promise<void>
   rescanAllPackages: () => Promise<boolean>
   osMismatchDetectedRef: React.MutableRefObject<boolean>
-  installedPackagesRef: React.MutableRefObject<Map<string, string>>
+
 }
 
 export function useInstallEvents({
@@ -31,7 +31,7 @@ export function useInstallEvents({
   checkDnsProxyError,
   rescanAllPackages,
   osMismatchDetectedRef,
-  installedPackagesRef,
+
 }: UseInstallEventsParams) {
   const [output, setOutput] = useState('')
   const [currentComponent, setCurrentComponent] = useState('')
@@ -137,7 +137,8 @@ export function useInstallEvents({
       } else {
         setHashtabMismatchRef.current(null)
       }
-      setHashtabMissingRef.current(!hashtabStatus.installed && installedPackagesRef.current.has('qt-resource-rebuilder'))
+      const qtrInstalled = await window.go.main.App.CheckPackageInstalled('qt-resource-rebuilder')
+      setHashtabMissingRef.current(!hashtabStatus.installed && qtrInstalled)
 
       const xochitlStatus = await window.go.main.App.GetXochitlStatus()
       setXochitlRunningRef.current(xochitlStatus.running)

@@ -919,7 +919,7 @@ func (a *App) InstallPackages(packageNames []string, deviceType string) {
 
 					response := <-a.dialogResponse
 					if response == "" || response == "cancel" {
-						return fmt.Errorf("user cancelled")
+						return installer.ErrHookDeclined
 					}
 
 					runtime.EventsEmit(a.ctx, "hook:started", map[string]string{
@@ -1078,7 +1078,7 @@ func (a *App) UninstallPackages(packageNames []string, deviceType string) {
 
 					response := <-a.dialogResponse
 					if response == "" || response == "cancel" {
-						return fmt.Errorf("user cancelled")
+						return installer.ErrHookDeclined
 					}
 
 					if hookResult.Command != nil {
