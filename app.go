@@ -581,7 +581,7 @@ func (a *App) checkGitHubUpdate(result UpdateCheckResult) UpdateCheckResult {
 	}
 
 	result.LatestVersion = release.TagName
-	result.ReleaseURL = release.HTMLURL
+	result.ReleaseURL = "https://remanager.io"
 	result.UpdateAvailable = isNewerVersion(version, release.TagName)
 
 	debug.Printf("[DEBUG] checkGitHubUpdate: current=%s, latest=%s, updateAvailable=%v\n",
