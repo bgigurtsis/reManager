@@ -143,7 +143,7 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
     if (!open || !systemInfo || !vellumInstalled) return
 
     const versions = [systemInfo.active.version, systemInfo.fallback.version]
-    const unchecked = versions.filter(v => !compatCache[v])
+    const unchecked = versions.filter(v => v !== 'unknown' && !compatCache[v])
     if (unchecked.length === 0) return
 
     setPartitionCompatLoading(true)
@@ -276,6 +276,9 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
   }
 
   const renderCompatIcon = (version: string) => {
+    if (version === 'unknown') {
+      return <span className="text-muted-foreground">—</span>
+    }
     const result = compatCache[version]
     if (!result) {
       if (partitionCompatLoading) {
