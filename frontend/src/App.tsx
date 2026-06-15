@@ -816,7 +816,16 @@ export default function App() {
   const handleTabChange = async (value: 'mods' | 'maintenance' | 'utilities') => {
     setActiveTab(value)
     if (value === 'mods') {
-      await rescanAllPackages()
+      if (connectionStatus === 'connected' && packages.length === 0) {
+        try {
+          await window.go.main.App.RefreshMetadata()
+          await refreshDeviceStateRef.current(device)
+        } catch (err) {
+          debugLog('Failed to reload mod catalog:', err)
+        }
+      } else {
+        await rescanAllPackages()
+      }
     }
     if (connectionStatus === 'connected' && !commandRunning) {
       window.go.main.App.GetXochitlStatus().then(s => { setXochitlRunning(s.running); setXoviActive(s.xoviActive) }).catch(() => {})
