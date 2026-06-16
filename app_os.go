@@ -24,7 +24,10 @@ import (
 	rmdevice "github.com/rmitchellscott/remarkable-go/device"
 	"github.com/rmitchellscott/remarkable-go/partition"
 	rmupdate "github.com/rmitchellscott/remarkable-go/update"
+	rmversion "github.com/rmitchellscott/remarkable-go/version"
 )
+
+const minSwupdateVersion = "3.11.2.5"
 
 func isSystemPath(path string) bool {
 	cleanPath := filepath.Clean(path)
@@ -172,7 +175,7 @@ func (a *App) getPartitionManager() (partition.Manager, error) {
 		return nil, fmt.Errorf("not connected")
 	}
 
-	exec := rmexecutor.NewSSH(client)
+	exec := rmexecutor.NewSSH(client, rmexecutor.WithLogger(debug.SlogLogger()))
 	fs, err := rmfilesystem.NewSSH(client)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create filesystem client: %w", err)
@@ -231,6 +234,14 @@ func (a *App) InstallOSVersion(version string) {
 		if client == nil {
 			runtime.EventsEmit(a.ctx, "software:install-error", map[string]string{"error": "not connected"})
 			return
+		}
+
+		if info, infoErr := a.GetPartitionInfo(); infoErr == nil && info != nil {
+			active := info.Active.Version
+			if active != "" && active != "unknown" && rmversion.Compare(active, minSwupdateVersion) < 0 {
+				runtime.EventsEmit(a.ctx, "software:install-error", map[string]string{"error": fmt.Sprintf("Installing OS versions requires reMarkable firmware %s or later (this reMarkable is on %s).", minSwupdateVersion, active)})
+				return
+			}
 		}
 
 		versions, err := swupdate.ListVersions(string(deviceType), nil)
@@ -377,7 +388,7 @@ func (a *App) InstallOSVersion(version string) {
 
 		runtime.EventsEmit(a.ctx, "software:install-progress", map[string]interface{}{"phase": "installing", "percent": 100.0, "message": "Installing..."})
 
-		exec := rmexecutor.NewSSH(client)
+		exec := rmexecutor.NewSSH(client, rmexecutor.WithLogger(debug.SlogLogger()))
 		updater := rmupdate.NewManager(exec)
 
 		var outputBuf bytes.Buffer

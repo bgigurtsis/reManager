@@ -841,7 +841,7 @@ func (a *App) detectDevice() (rmdevice.Type, rmdevice.Architecture, string, erro
 		return rmdevice.Unknown, "", "", fmt.Errorf("failed to detect device: %w", err)
 	}
 
-	exec := rmexecutor.NewSSH(client)
+	exec := rmexecutor.NewSSH(client, rmexecutor.WithLogger(debug.SlogLogger()))
 	arch, err := rmdevice.DetectArchitecture(exec)
 	if err != nil {
 		return deviceType, "", "", fmt.Errorf("failed to detect architecture: %w", err)
