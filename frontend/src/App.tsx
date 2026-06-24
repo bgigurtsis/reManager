@@ -159,6 +159,7 @@ declare global {
           GetAvailableOSVersions(): Promise<{
             version: string; isLatest: boolean; isInstalled: boolean; filename: string; size: number
           }[]>
+          GetOSInstallMode(): Promise<string>
           InstallOSVersion(version: string): void
           CancelOSInstall(): void
           CheckOSCompatibility(targetVersion: string): Promise<CompatibilityResult>

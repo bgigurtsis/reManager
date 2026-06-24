@@ -800,6 +800,8 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 	a.connectedFirmware = firmware
 	a.mu.Unlock()
 
+	go a.maybeRecoverLegacyConf()
+
 	return ConnectionResult{
 		Success: true,
 		Message: "Connected successfully",
