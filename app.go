@@ -326,6 +326,8 @@ type DialogRequest struct {
 	InProgressMessage string                `json:"inProgressMessage"`
 	InfoOnly          bool                  `json:"infoOnly"`
 	InstallFlow       bool                  `json:"installFlow"`
+	Success           bool                  `json:"success"`
+	PrimaryAction     string                `json:"primaryAction"`
 	Actions           []DialogActionRequest `json:"actions"`
 }
 
@@ -349,6 +351,8 @@ func dialogRequestFromConfig(cfg *component.DialogConfig) DialogRequest {
 		InProgressMessage: cfg.InProgressMessage,
 		InfoOnly:          cfg.InfoOnly,
 		InstallFlow:       cfg.InstallFlow,
+		Success:           cfg.Success,
+		PrimaryAction:     cfg.PrimaryAction,
 		Actions:           actions,
 	}
 }

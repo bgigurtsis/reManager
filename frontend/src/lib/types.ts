@@ -67,6 +67,8 @@ export interface DialogRequest {
   inProgressMessage: string
   infoOnly: boolean
   installFlow?: boolean
+  success?: boolean
+  primaryAction?: string
   actions: DialogActionRequest[]
 }
 
@@ -114,6 +116,7 @@ export interface PackageInfo {
   devices: string[]
   depends: string[]
   conflicts: string[]
+  provides: string[]
   osMin: string | null
   osMax: string | null
   osConstraints: { version: string; operator: '>=' | '<' | '>' | '<=' | '=' }[] | null
@@ -122,6 +125,24 @@ export interface PackageInfo {
   status: string
   donateUrl: string | null
   readmeUrl: string | null
+}
+
+export interface ProviderOption {
+  name: string
+  version: string
+  description: string
+  compatible: boolean
+  incompatibleReason?: string
+  osMin: string | null
+  osMax: string | null
+  osConstraints: { version: string; operator: '>=' | '<' | '>' | '<=' | '=' }[] | null
+}
+
+export interface VirtualChoice {
+  virtual: string
+  requiredBy: string[]
+  providers: ProviderOption[]
+  default?: string
 }
 
 export interface CompatibilityResult {

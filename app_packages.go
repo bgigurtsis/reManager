@@ -34,6 +34,7 @@ type PackageInfo struct {
 	Devices        []string              `json:"devices"`
 	Depends        []string              `json:"depends"`
 	Conflicts      []string              `json:"conflicts"`
+	Provides       []string              `json:"provides"`
 	OSMin          *string               `json:"osMin"`
 	OSMax          *string               `json:"osMax"`
 	OSConstraints  []vellum.OSConstraint `json:"osConstraints"`
@@ -173,6 +174,7 @@ func (a *App) GetPackages(deviceType, firmware, arch string) []PackageInfo {
 			Devices:        pkg.Devices,
 			Depends:        visibleDepends,
 			Conflicts:      pkg.Conflicts,
+			Provides:       pkg.Provides,
 			OSMin:          pkg.OSMin,
 			OSMax:          pkg.OSMax,
 			OSConstraints:  pkg.OSConstraints,
@@ -275,9 +277,11 @@ func (a *App) GetPackageForOS(name, targetOS, deviceType, arch string) *PackageI
 		Devices:        pkg.Devices,
 		Depends:        pkg.Depends,
 		Conflicts:      pkg.Conflicts,
+		Provides:       pkg.Provides,
 		OSMin:          pkg.OSMin,
 		OSMax:          pkg.OSMax,
 		OSConstraints:  pkg.OSConstraints,
+		Compatible:     true,
 		Status:         pkg.Status,
 		DonateURL:      pkg.DonateURL,
 		ReadmeURL:      pkg.ReadmeURL,
@@ -673,6 +677,33 @@ func (a *App) SimulateInstall(packageNames []string, deviceType string) (*Instal
 	}
 
 	return &InstallSimulationResult{Packages: allPackages, Requested: packageNames}, nil
+}
+
+func (a *App) GetInstallChoices(packageNames []string, deviceType string) []vellum.VirtualChoice {
+	if a.metadata == nil || !a.metadata.Ready() || a.vellumClient == nil {
+		return []vellum.VirtualChoice{}
+	}
+
+	firmware := ""
+	if osState, err := a.vellumClient.GetOSVersionState(); err == nil {
+		firmware = osState.CurrentVersion
+	} else {
+		debug.Printf("[DEBUG] GetInstallChoices: GetOSVersionState error: %v\n", err)
+	}
+
+	installed, err := a.vellumClient.List()
+	if err != nil {
+		debug.Printf("[DEBUG] GetInstallChoices: List error: %v\n", err)
+		return []vellum.VirtualChoice{}
+	}
+
+	arch := commands.GetDownloadArch(a.connectedDeviceArch)
+	choices := a.metadata.ResolveVirtualChoices(packageNames, installed, deviceType, firmware, arch)
+	debug.Printf("[DEBUG] GetInstallChoices: %d choice(s) for %v\n", len(choices), packageNames)
+	if choices == nil {
+		return []vellum.VirtualChoice{}
+	}
+	return choices
 }
 
 func (a *App) SimulateUninstall(packageNames []string) (*UninstallSimulationResult, error) {
@@ -1151,6 +1182,7 @@ func (a *App) RunMaintenanceCommand(pkgName, commandID, deviceType string) {
 				ctx := component.CommandContext{
 					Arch:   a.connectedDeviceArch,
 					Device: dev,
+					Exec:   &wailsExecutor{app: a},
 				}
 
 				hookResult, err := hookFunc(ctx)
@@ -1182,6 +1214,18 @@ func (a *App) RunMaintenanceCommand(pkgName, commandID, deviceType string) {
 					})
 
 					exec := &wailsExecutor{app: a}
+
+					for _, action := range hookResult.DialogConfig.Actions {
+						if action.Id == response && action.Type == "run_command" {
+							runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("$ %s\n", action.Value))
+							if err := exec.Execute([]component.CommandResult{{Script: action.Value}}); err != nil {
+								runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("Error: %v\n", err))
+								runtime.EventsEmit(a.ctx, "command:done", false)
+								return
+							}
+							break
+						}
+					}
 
 					if hookResult.Command != nil {
 						runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("$ %s\n", hookResult.Command.Script))

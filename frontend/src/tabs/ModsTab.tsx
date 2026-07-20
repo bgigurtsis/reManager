@@ -17,7 +17,7 @@ import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip
 import { Badge } from '@/components/ui/badge'
 import { Loader2, Check, AlertTriangle, AlertCircle, Trash2, Plus, X, Search, RefreshCw } from 'lucide-react'
 import { useAppContext } from '@/contexts/AppContext'
-import { PackageInfo } from '@/lib/types'
+import { PackageInfo, VirtualChoice } from '@/lib/types'
 
 export type SelectPackageForOSFn = (name: string, targetOS: string, isCompatible?: boolean) => Promise<void>
 
@@ -51,7 +51,8 @@ interface ModsTabProps {
   refreshingPackages: boolean
   setRefreshingPackages: (v: boolean) => void
 
-  setPendingInstallConfirm: (v: { packages: string[]; requested: string[] } | null) => void
+  setPendingProviderChoice: (v: { choices: VirtualChoice[]; index: number; selected: string[]; requested: string[] } | null) => void
+  runInstallSimulation: (packages: string[]) => Promise<void>
   setPendingUninstallConfirm: (v: any) => void
 
   setActiveTab: (v: 'mods' | 'maintenance' | 'utilities') => void
@@ -71,6 +72,7 @@ function installedOnlyPackage(name: string, version: string): PackageInfo {
     devices: [],
     depends: [],
     conflicts: [],
+    provides: [],
     osMin: null,
     osMax: null,
     osConstraints: null,
@@ -101,7 +103,8 @@ export function ModsTab({
   setQueueError,
   refreshingPackages,
   setRefreshingPackages,
-  setPendingInstallConfirm,
+  setPendingProviderChoice,
+  runInstallSimulation,
   setPendingUninstallConfirm,
   setActiveTab,
   handleChecklistUpgrade,
@@ -793,24 +796,17 @@ export function ModsTab({
                   onClick={async () => {
                     setSimulatingInstall(true)
                     try {
-                      const sim = await window.go.main.App.SimulateInstall([...installQueue], device)
-                      const filteredPackages = sim.packages.filter((name: string) => !installedPackages.has(name))
-                      if (filteredPackages.length === 0) {
-                        setQueueError('All packages are already installed')
-                        setTimeout(() => setQueueError(null), 4000)
-                        setInstallQueue(new Set())
-                      } else {
-                        setPendingInstallConfirm({ packages: filteredPackages, requested: sim.requested })
+                      const requested = [...installQueue]
+                      let choices: VirtualChoice[] = []
+                      try {
+                        choices = await window.go.main.App.GetInstallChoices(requested, device)
+                      } catch (err) {
+                        console.error('GetInstallChoices failed:', err)
                       }
-                    } catch (err) {
-                      console.error('SimulateInstall failed:', err)
-                      const pkgs = [...installQueue].filter((name) => !installedPackages.has(name))
-                      if (pkgs.length === 0) {
-                        setQueueError('All packages are already installed')
-                        setTimeout(() => setQueueError(null), 4000)
-                        setInstallQueue(new Set())
+                      if (choices.length > 0) {
+                        setPendingProviderChoice({ choices, index: 0, selected: [], requested })
                       } else {
-                        setPendingInstallConfirm({ packages: pkgs, requested: pkgs })
+                        await runInstallSimulation(requested)
                       }
                     } finally {
                       setSimulatingInstall(false)

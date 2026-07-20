@@ -4,6 +4,7 @@ import { SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet
 import { ExternalLink, Plus, Trash2, Check, AlertTriangle, ArrowLeft, ArrowRight, X, Heart, BookOpen } from 'lucide-react'
 import { StatusBadge } from '@/components/StatusBadge'
 import { PackageInfo } from '@/lib/types'
+import { formatOsRange } from '@/lib/format'
 
 interface PackageDetailPanelProps {
   pkg: PackageInfo
@@ -56,40 +57,7 @@ export function PackageDetailPanel({
   onViewReadme,
   onBack,
 }: PackageDetailPanelProps) {
-  const formatOsRangeFor = (p: PackageInfo) => {
-    if (p.osConstraints && p.osConstraints.length > 0) {
-      const minC = p.osConstraints.find(c => c.operator === '>=')
-      const maxC = p.osConstraints.find(c => c.operator === '<')
-      const exactC = p.osConstraints.find(c => c.operator === '=')
-
-      if (exactC) return exactC.version
-
-      if (minC && maxC) {
-        const maxInclusive = (parseFloat(maxC.version) - 0.01).toFixed(2)
-        return minC.version === maxInclusive ? minC.version : `${minC.version} – ${maxInclusive}`
-      }
-
-      if (minC) return `${minC.version}+`
-      if (maxC) {
-        const maxInclusive = (parseFloat(maxC.version) - 0.01).toFixed(2)
-        return `≤ ${maxInclusive}`
-      }
-    }
-
-    if (!p.osMin && !p.osMax) return null
-    if (p.osMin && p.osMax) {
-      const maxInclusive = (parseFloat(p.osMax) - 0.01).toFixed(2)
-      return p.osMin === maxInclusive ? p.osMin : `${p.osMin} – ${maxInclusive}`
-    }
-    if (p.osMin) return `${p.osMin}+`
-    if (p.osMax) {
-      const maxInclusive = (parseFloat(p.osMax) - 0.01).toFixed(2)
-      return `≤ ${maxInclusive}`
-    }
-    return null
-  }
-
-  const osRange = formatOsRangeFor(pkg)
+  const osRange = formatOsRange(pkg)
 
   return (
     <div className="flex flex-col h-full">
@@ -187,9 +155,22 @@ export function PackageDetailPanel({
               <dd className="col-span-2">
                 <ul className="space-y-1">
                   {pkg.depends.map((dep) => {
-                    const depInstalled = installedPackages.has(dep)
                     const depPkg = allPackages.find(p => p.name === dep)
-                    const depOsRange = depPkg ? formatOsRangeFor(depPkg) : null
+                    const providers = depPkg ? [] : allPackages.filter(p => (p.provides || []).includes(dep))
+                    if (providers.length > 0) {
+                      const satisfiedBy = providers.find(p => installedPackages.has(p.name))
+                      return (
+                        <li key={dep} className="flex items-center gap-2">
+                          <span>{dep}</span>
+                          <span className="text-xs text-muted-foreground">
+                            ({satisfiedBy ? satisfiedBy.name : providers.map(p => p.name).join(' or ')})
+                          </span>
+                          {satisfiedBy && <Check className="h-3 w-3 text-green-600" />}
+                        </li>
+                      )
+                    }
+                    const depInstalled = installedPackages.has(dep)
+                    const depOsRange = depPkg ? formatOsRange(depPkg) : null
                     const depIncompatible = depPkg && !depPkg.compatible
                     return (
                       <li key={dep} className="flex items-center gap-2">

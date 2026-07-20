@@ -33,7 +33,8 @@ import { Badge } from '@/components/ui/badge'
 import { Banner } from '@/components/ui/banner'
 import { Loader2, Check, AlertTriangle, AlertCircle, WifiOff, Info, CheckCircle2, BookOpen, Cpu } from 'lucide-react'
 import { Checkbox } from '@/components/ui/checkbox'
-import { PackageInfo, CompatibilityResult, MaintenanceCommandInfo, SystemTaskInfo, SSHKey, SavedDevice, UpdateServiceStatus, InstallSimulationResult, UninstallSimulationResult, InstalledPackagesResult, HashtabVersionStatus, TimezoneStatus, Step } from '@/lib/types'
+import { formatOsRange, launcherSelected } from '@/lib/format'
+import { PackageInfo, CompatibilityResult, MaintenanceCommandInfo, SystemTaskInfo, SSHKey, SavedDevice, UpdateServiceStatus, InstallSimulationResult, UninstallSimulationResult, InstalledPackagesResult, HashtabVersionStatus, TimezoneStatus, VirtualChoice, Step } from '@/lib/types'
 
 declare global {
   interface Window {
@@ -58,7 +59,8 @@ declare global {
           IsShellActive(): Promise<boolean>
           GetDeviceInfo(): Promise<Record<string, string>>
           GetUpdateServiceStatus(): Promise<UpdateServiceStatus>
-          GetXochitlStatus(): Promise<{ running: boolean; xoviActive: boolean }>
+          GetXochitlStatus(): Promise<{ running: boolean; xoviActive: boolean; activeLauncher: string; currentLauncher: string }>
+          GetXochitlStatusQuick(): Promise<{ running: boolean; xoviActive: boolean }>
           GetDefaultSSHKeys(): Promise<SSHKey[]>
           SelectKeyFile(): Promise<string>
           GetSavedDevices(): Promise<SavedDevice[]>
@@ -96,6 +98,7 @@ declare global {
           InstallPackages(packageNames: string[], deviceType: string): Promise<void>
           UninstallPackages(packageNames: string[], deviceType: string): Promise<void>
           SimulateInstall(packageNames: string[], deviceType: string): Promise<InstallSimulationResult>
+          GetInstallChoices(packageNames: string[], deviceType: string): Promise<VirtualChoice[]>
           SimulateUninstall(packageNames: string[]): Promise<UninstallSimulationResult>
           RunMaintenanceCommand(pkgName: string, commandId: string, deviceType: string): Promise<void>
           RunSystemTask(taskId: string, deviceType: string): Promise<void>
@@ -223,6 +226,8 @@ export default function App() {
     updateServiceStatus, setUpdateServiceStatus,
     xochitlRunning, setXochitlRunning,
     xoviActive, setXoviActive,
+    activeLauncher, setActiveLauncher,
+    currentLauncher, setCurrentLauncher,
     guideOffer, setGuideOffer,
     guideInstalling, setGuideInstalling,
     showGuideRestartDialog, setShowGuideRestartDialog,
@@ -269,7 +274,27 @@ export default function App() {
     packages: string[]
     requested: string[]
   } | null>(null)
+  const [pendingProviderChoice, setPendingProviderChoice] = useState<{
+    choices: VirtualChoice[]
+    index: number
+    selected: string[]
+    requested: string[]
+  } | null>(null)
+  const [providerSelection, setProviderSelection] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (pendingProviderChoice === null) {
+      setProviderSelection(null)
+      return
+    }
+    const step = pendingProviderChoice.choices[pendingProviderChoice.index]
+    const recommended = step?.providers.find(p => p.name === step.default && p.compatible)
+    setProviderSelection(recommended?.name ?? null)
+  }, [pendingProviderChoice])
   const [pendingXoviInfo, setPendingXoviInfo] = useState<string[] | null>(null)
+  const [pendingOxideInfo, setPendingOxideInfo] = useState<string[] | null>(null)
+  const [launcherctlDecision, setLauncherctlDecision] = useState<'yes' | 'no' | null>(null)
+  const [oxideAckChecked, setOxideAckChecked] = useState(false)
   const [tripletapDecision, setTripletapDecision] = useState<'yes' | 'no' | null>(null)
   const [xoviAckChecked, setXoviAckChecked] = useState(false)
   const [pendingUninstallConfirm, setPendingUninstallConfirm] = useState<{
@@ -284,9 +309,12 @@ export default function App() {
   const [upgradesAvailable, setUpgradesAvailable] = useState(false)
   const [reinstallInProgress, setReinstallInProgress] = useState(false)
 
+  const launcherActive = launcherSelected(activeLauncher)
+  const launcherConfigured = launcherSelected(currentLauncher)
+
   const xoviNotRunning = useMemo(() =>
-    installedPackages.has('xovi') && xochitlRunning && !xoviActive && !hashtabMismatch && !hashtabMissing,
-    [installedPackages, xochitlRunning, xoviActive, hashtabMismatch, hashtabMissing]
+    installedPackages.has('xovi') && xochitlRunning && !xoviActive && !hashtabMismatch && !hashtabMissing && !launcherConfigured,
+    [installedPackages, xochitlRunning, xoviActive, hashtabMismatch, hashtabMissing, launcherConfigured]
   )
 
 
@@ -445,6 +473,8 @@ export default function App() {
     setInstallQueue,
     setXochitlRunning,
     setXoviActive,
+    setActiveLauncher,
+    setCurrentLauncher,
     setHashtabMismatch,
     setHashtabMissing,
     setCompatibilityStatus,
@@ -485,6 +515,8 @@ export default function App() {
     setUpdateServiceStatus,
     setXochitlRunning,
     setXoviActive,
+    setActiveLauncher,
+    setCurrentLauncher,
     setUpgradesAvailable,
     setOsMismatchDetected,
     osMismatchDetectedRef,
@@ -609,7 +641,7 @@ export default function App() {
   useEffect(() => {
     if (connectionStatus !== 'connected' || commandRunning) return
     const interval = window.setInterval(() => {
-      window.go.main.App.GetXochitlStatus().then(s => { setXochitlRunning(s.running); setXoviActive(s.xoviActive) }).catch(() => {})
+      window.go.main.App.GetXochitlStatusQuick().then(s => { setXochitlRunning(s.running); setXoviActive(s.xoviActive) }).catch(() => {})
     }, 60000)
     return () => clearInterval(interval)
   }, [connectionStatus, commandRunning])
@@ -695,6 +727,21 @@ export default function App() {
     }
   }, [pendingXoviInfo])
 
+  useEffect(() => {
+    if (pendingOxideInfo === null) {
+      setLauncherctlDecision(null)
+      setOxideAckChecked(false)
+    }
+  }, [pendingOxideInfo])
+
+  const continueInstall = (pkgs: string[]) => {
+    if (pkgs.includes('oxide') && !installedPackages.has('oxide')) {
+      setPendingOxideInfo(pkgs)
+    } else {
+      handleInstallQueue(pkgs)
+    }
+  }
+
 
   const handleDisconnect = async () => {
     await window.go.main.App.Disconnect()
@@ -767,6 +814,32 @@ export default function App() {
   }
 
 
+  const runInstallSimulation = async (requested: string[]) => {
+    const showNothingToDo = () => {
+      setQueueError('All packages are already installed')
+      setTimeout(() => setQueueError(null), 4000)
+      setInstallQueue(new Set())
+    }
+
+    try {
+      const sim = await window.go.main.App.SimulateInstall(requested, device)
+      const filteredPackages = sim.packages.filter((name: string) => !installedPackages.has(name))
+      if (filteredPackages.length === 0) {
+        showNothingToDo()
+      } else {
+        setPendingInstallConfirm({ packages: filteredPackages, requested: sim.requested })
+      }
+    } catch (err) {
+      console.error('SimulateInstall failed:', err)
+      const pkgs = requested.filter((name) => !installedPackages.has(name))
+      if (pkgs.length === 0) {
+        showNothingToDo()
+      } else {
+        setPendingInstallConfirm({ packages: pkgs, requested: pkgs })
+      }
+    }
+  }
+
   const handleInstallQueue = async (allPackages?: string[]) => {
     const toInstall = allPackages || Array.from(installQueue).filter((name) => !installedPackages.has(name))
 
@@ -774,6 +847,8 @@ export default function App() {
       setInstallQueue(new Set())
       return
     }
+
+    setRunningHookTitle(null)
 
     setShowProgressModal(true)
     setProgressModalType('install')
@@ -796,6 +871,8 @@ export default function App() {
       setUninstallQueue(new Set())
       return
     }
+
+    setRunningHookTitle(null)
 
     setShowProgressModal(true)
     setProgressModalType('install')
@@ -835,7 +912,7 @@ export default function App() {
       }
     }
     if (connectionStatus === 'connected' && !commandRunning) {
-      window.go.main.App.GetXochitlStatus().then(s => { setXochitlRunning(s.running); setXoviActive(s.xoviActive) }).catch(() => {})
+      window.go.main.App.GetXochitlStatus().then(s => { setXochitlRunning(s.running); setXoviActive(s.xoviActive); setActiveLauncher(s.activeLauncher || ''); setCurrentLauncher(s.currentLauncher || '') }).catch(() => {})
     }
   }
 
@@ -915,6 +992,7 @@ export default function App() {
     const cmd = cmds.find(c => c.id === commandId)
     if (!cmd) return
 
+    setRunningHookTitle(null)
     if (cmd.allowStop) {
       setCurrentRunningCommand({ componentId, commandId })
     }
@@ -1084,14 +1162,14 @@ export default function App() {
                 priority: 1,
                 severity: 'destructive',
                 icon: AlertCircle,
-                active: warningsChecked && !xochitlRunning && !commandRunning && !showProgressModal && connectionStatus === 'connected',
+                active: warningsChecked && !xochitlRunning && !launcherActive && !commandRunning && !showProgressModal && connectionStatus === 'connected',
                 content: (
                   <Banner
                     severity="destructive"
                     icon={AlertCircle}
                     title="reMarkable screen may be unresponsive"
                     actions={
-                      installedPackages.has('xovi') ? (
+                      launcherConfigured || installedPackages.has('xovi') ? (
                         <Button size="sm" onClick={() => setShowStartUIDialog(true)}>
                           Fix
                         </Button>
@@ -1225,7 +1303,8 @@ export default function App() {
                 setQueueError={setQueueError}
                 refreshingPackages={refreshingPackages}
                 setRefreshingPackages={setRefreshingPackages}
-                setPendingInstallConfirm={setPendingInstallConfirm}
+                setPendingProviderChoice={setPendingProviderChoice}
+                runInstallSimulation={runInstallSimulation}
                 setPendingUninstallConfirm={setPendingUninstallConfirm}
                 setActiveTab={setActiveTab}
                 handleChecklistUpgrade={handleChecklistUpgrade}
@@ -1239,6 +1318,8 @@ export default function App() {
               maintenanceCommands={maintenanceCommands}
               updateServiceStatus={updateServiceStatus}
               xochitlRunning={xochitlRunning}
+              launcherConfigured={launcherConfigured}
+              currentLauncher={currentLauncher}
               xoviActive={xoviActive}
               hashtabMismatch={hashtabMismatch}
               hashtabMissing={hashtabMissing}
@@ -1282,13 +1363,16 @@ export default function App() {
 
       {/* Progress Modal */}
       <Dialog
-        open={showProgressModal || pendingInstallConfirm !== null || pendingXoviInfo !== null || pendingUninstallConfirm !== null}
+        open={showProgressModal || pendingInstallConfirm !== null || pendingProviderChoice !== null || pendingXoviInfo !== null || pendingOxideInfo !== null || pendingUninstallConfirm !== null}
         onOpenChange={(open) => {
           if (!installing && !uninstalling && !commandRunning) {
             if (!open) {
               setShowProgressModal(false)
               setPendingInstallConfirm(null)
+              setPendingProviderChoice(null)
+              setProviderSelection(null)
               setPendingXoviInfo(null)
+              setPendingOxideInfo(null)
               setPendingUninstallConfirm(null)
               setProgressModalType(null)
               setProgressIndex(0)
@@ -1299,24 +1383,139 @@ export default function App() {
               setLastInstallSuccess(null)
               setLastOperationType(null)
               if (connectionStatus === 'connected') {
-                window.go.main.App.GetXochitlStatus().then(s => { setXochitlRunning(s.running); setXoviActive(s.xoviActive) }).catch(() => {})
+                window.go.main.App.GetXochitlStatus().then(s => { setXochitlRunning(s.running); setXoviActive(s.xoviActive); setActiveLauncher(s.activeLauncher || ''); setCurrentLauncher(s.currentLauncher || '') }).catch(() => {})
               }
             }
           }
         }}
         closable={false}
       >
-        <DialogContent className={(showProgressModal || installing || uninstalling || commandRunning) && pendingInstallConfirm === null && pendingUninstallConfirm === null && pendingXoviInfo === null ? "w-[90vw] max-w-none" : undefined}>
+        <DialogContent className={(showProgressModal || installing || uninstalling || commandRunning) && pendingInstallConfirm === null && pendingUninstallConfirm === null && pendingProviderChoice === null && pendingXoviInfo === null && pendingOxideInfo === null ? "w-[90vw] max-w-none" : undefined}>
+          {/* Provider choice for virtual dependencies (e.g. launcher: appload or oxide) */}
+          {pendingProviderChoice !== null && !installing && !uninstalling && (() => {
+            const step = pendingProviderChoice.choices[pendingProviderChoice.index]
+            const requiredBy = step.requiredBy.join(', ')
+            return (
+              <>
+                <DialogHeader>
+                  {pendingProviderChoice.choices.length > 1 && (
+                    <p className="text-xs text-muted-foreground">
+                      Step {pendingProviderChoice.index + 1} of {pendingProviderChoice.choices.length}
+                    </p>
+                  )}
+                  <DialogTitle>
+                    {requiredBy} require{step.requiredBy.length === 1 ? 's' : ''}{' '}
+                    <span className="font-mono">{step.virtual}</span>
+                  </DialogTitle>
+                  <DialogDescription>
+                    Choose which package to install.
+                  </DialogDescription>
+                </DialogHeader>
+
+                <RadioGroup
+                  value={providerSelection ?? ''}
+                  onValueChange={setProviderSelection}
+                  className="gap-2"
+                >
+                  {step.providers.map((provider) => {
+                    const installed = installedPackages.has(provider.name)
+                    const osRange = formatOsRange(provider)
+                    const nameButton = <span className="text-sm font-semibold">{provider.name}</span>
+                    const details = (
+                      <>
+                        <div className="flex items-center justify-between gap-2 min-h-[24px]">
+                          {nameButton}
+                          <div className="flex items-center gap-2">
+                            {installed && <Check className="h-4 w-4 text-green-600" />}
+                            {provider.name === step.default && (
+                              <Badge variant="outline">Recommended</Badge>
+                            )}
+                          </div>
+                        </div>
+                        {provider.description && (
+                          <p className="text-sm text-muted-foreground mt-1">{provider.description}</p>
+                        )}
+                        {!provider.compatible && (
+                          <p className="text-sm text-destructive mt-1">
+                            {provider.incompatibleReason === 'device'
+                              ? 'Does not support your reMarkable model'
+                              : `Requires OS ${osRange || 'a different version'}`}
+                          </p>
+                        )}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.preventDefault()
+                            e.stopPropagation()
+                            handleSelectPackageForOS(provider.name, deviceInfo.firmware || currentOsVersion, provider.compatible)
+                          }}
+                          className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground mt-2"
+                        >
+                          More info
+                        </button>
+                      </>
+                    )
+
+                    if (!provider.compatible) {
+                      return (
+                        <div key={provider.name} className="block rounded-md border border-dashed p-3 opacity-70">
+                          {details}
+                        </div>
+                      )
+                    }
+
+                    return (
+                      <label
+                        key={provider.name}
+                        htmlFor={`provider-${provider.name}`}
+                        className={`block rounded-md border p-3 cursor-pointer transition-colors hover:bg-accent ${providerSelection === provider.name ? 'border-primary bg-accent' : ''}`}
+                      >
+                        <RadioGroupItem value={provider.name} id={`provider-${provider.name}`} className="sr-only" />
+                        {details}
+                      </label>
+                    )
+                  })}
+                </RadioGroup>
+
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setPendingProviderChoice(null)}>
+                    Cancel
+                  </Button>
+                  <Button
+                    disabled={providerSelection === null}
+                    onClick={() => {
+                      const selected = [...pendingProviderChoice.selected, providerSelection!]
+                      const next = pendingProviderChoice.index + 1
+                      if (next < pendingProviderChoice.choices.length) {
+                        setPendingProviderChoice({ ...pendingProviderChoice, index: next, selected })
+                      } else {
+                        const requested = [...selected, ...pendingProviderChoice.requested]
+                        setPendingProviderChoice(null)
+                        runInstallSimulation(requested)
+                      }
+                    }}
+                  >
+                    Continue
+                  </Button>
+                </DialogFooter>
+              </>
+            )
+          })()}
+
           {/* Confirmation step for install */}
           {pendingInstallConfirm !== null && !installing && !uninstalling && (() => {
             const requestedSet = new Set(pendingInstallConfirm.requested)
             const requiredBy: Record<string, string[]> = {}
             for (const pkgName of pendingInstallConfirm.packages) {
               if (!requestedSet.has(pkgName)) {
+                const provided = packages.find((p) => p.name === pkgName)?.provides || []
                 for (const reqPkg of pendingInstallConfirm.packages) {
                   if (reqPkg === pkgName) continue
                   const pkgInfo = packages.find((p) => p.name === reqPkg)
-                  if (pkgInfo?.depends?.includes(pkgName)) {
+                  const satisfies = pkgInfo?.depends?.some(
+                    (dep) => dep === pkgName || provided.includes(dep)
+                  )
+                  if (satisfies) {
                     if (!requiredBy[pkgName]) requiredBy[pkgName] = []
                     requiredBy[pkgName].push(reqPkg)
                   }
@@ -1355,7 +1554,7 @@ export default function App() {
                     if (pkgs.includes('xovi') && !installedPackages.has('xovi')) {
                       setPendingXoviInfo(pkgs)
                     } else {
-                      handleInstallQueue(pkgs)
+                      continueInstall(pkgs)
                     }
                   }}>
                     Install ({pendingInstallConfirm.packages.length})
@@ -1427,7 +1626,7 @@ export default function App() {
                             ? [...pendingXoviInfo, 'tripletap']
                             : pendingXoviInfo
                           setPendingXoviInfo(null)
-                          handleInstallQueue(pkgs)
+                          continueInstall(pkgs)
                         }}
                       >
                         Continue
@@ -1469,6 +1668,122 @@ export default function App() {
                         onClick={() => {
                           const pkgs = pendingXoviInfo
                           setPendingXoviInfo(null)
+                          continueInstall(pkgs)
+                        }}
+                      >
+                        Continue
+                      </Button>
+                    </DialogFooter>
+                  </div>
+                )}
+              </>
+            )
+          })()}
+
+          {/* Pre-install oxide info */}
+          {pendingOxideInfo !== null && !installing && !uninstalling && (() => {
+            const switchingInstalled = installedPackages.has('launcherctl-oxide')
+            const switchingQueued = pendingOxideInfo.includes('launcherctl-oxide')
+            const showAckScreen = switchingQueued || switchingInstalled
+            return (
+              <>
+                <DialogHeader>
+                  <DialogTitle className="flex items-center gap-2">
+                    <AlertTriangle className="h-5 w-5 text-yellow-500" />
+                    Oxide Needs launcherctl to Start
+                  </DialogTitle>
+                  <DialogDescription className="pt-2">
+                    Oxide is a full launcher. It takes over the screen instead of running inside the stock interface.
+                  </DialogDescription>
+                </DialogHeader>
+
+                {!showAckScreen ? (
+                  <div className="space-y-3">
+                    <p className="text-sm font-medium">Would you like to install launcherctl?</p>
+                    <RadioGroup
+                      value={launcherctlDecision ?? ''}
+                      onValueChange={(v) => setLauncherctlDecision(v as 'yes' | 'no')}
+                      className="gap-2"
+                    >
+                      <label
+                        htmlFor="lc-yes"
+                        className={`block rounded-md border p-3 cursor-pointer transition-colors hover:bg-accent ${launcherctlDecision === 'yes' ? 'border-primary bg-accent' : ''}`}
+                      >
+                        <RadioGroupItem value="yes" id="lc-yes" className="sr-only" />
+                        <div className="flex items-center justify-between gap-2 min-h-[24px]">
+                          <span className="text-sm font-semibold">Yes, install launcherctl</span>
+                          <Badge variant="outline">Recommended</Badge>
+                        </div>
+                        <p className="text-sm text-muted-foreground mt-1">Switch between oxide, other launchers, and the stock interface from Maintenance.</p>
+                      </label>
+
+                      <label
+                        htmlFor="lc-no"
+                        className={`block rounded-md border p-3 cursor-pointer transition-colors hover:bg-accent ${launcherctlDecision === 'no' ? 'border-primary bg-accent' : ''}`}
+                      >
+                        <RadioGroupItem value="no" id="lc-no" className="sr-only" />
+                        <div className="flex items-center min-h-[24px]">
+                          <span className="text-sm font-semibold">No, just oxide</span>
+                        </div>
+                        <p className="text-sm text-muted-foreground mt-1">
+                          Oxide will be installed but won't run.
+                        </p>
+                      </label>
+                    </RadioGroup>
+
+                    <DialogFooter>
+                      <Button variant="outline" onClick={() => setPendingOxideInfo(null)}>
+                        Cancel
+                      </Button>
+                      <Button
+                        disabled={launcherctlDecision === null}
+                        onClick={() => {
+                          const pkgs = launcherctlDecision === 'yes'
+                            ? [...pendingOxideInfo, 'launcherctl-oxide']
+                            : pendingOxideInfo
+                          setPendingOxideInfo(null)
+                          handleInstallQueue(pkgs)
+                        }}
+                      >
+                        Continue
+                      </Button>
+                    </DialogFooter>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <p className="text-sm font-medium">How to change launchers</p>
+                    <div className="rounded-md border bg-accent p-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-sm font-semibold">launcherctl</span>
+                        <Badge variant="outline" className="gap-1">
+                          <Check className="h-3 w-3" />
+                          {switchingInstalled ? 'Installed' : 'Queued for install'}
+                        </Badge>
+                      </div>
+                      <p className="text-sm text-muted-foreground mt-1">Switch between oxide, other launchers, and the stock interface.</p>
+                    </div>
+                    <p className="border-t pt-2.5 text-sm text-muted-foreground">
+                      Switch from reManager: Maintenance → launcherctl → Switch.
+                    </p>
+
+                    <label className="flex items-start gap-3 rounded-md border bg-muted p-3 cursor-pointer">
+                      <Checkbox
+                        checked={oxideAckChecked}
+                        onCheckedChange={(v) => setOxideAckChecked(v === true)}
+                        className="mt-0.5"
+                      />
+                      <span className="text-sm">I'll manage my launcher from the Maintenance tab.</span>
+                    </label>
+
+                    <DialogFooter>
+                      <Button variant="outline" onClick={() => setPendingOxideInfo(null)}>
+                        Cancel
+                      </Button>
+                      <Button
+                        disabled={!oxideAckChecked}
+                        onClick={() => {
+                          const pkgs = pendingOxideInfo
+                          setPendingOxideInfo(null)
                           handleInstallQueue(pkgs)
                         }}
                       >
@@ -1567,7 +1882,7 @@ export default function App() {
           })()}
 
           {/* Progress step */}
-          {(showProgressModal || installing || uninstalling || commandRunning) && pendingInstallConfirm === null && pendingUninstallConfirm === null && (
+          {(showProgressModal || installing || uninstalling || commandRunning) && pendingInstallConfirm === null && pendingUninstallConfirm === null && pendingProviderChoice === null && pendingOxideInfo === null && (
             <ProgressModal
               title={getModalTitle()}
               progressText={getProgressText()}
@@ -1608,16 +1923,21 @@ export default function App() {
               {/* Actions-only dialog (e.g., post-command "Start UI with/without Mods") */}
               <DialogHeader>
                 <DialogTitle className="flex items-center gap-2">
-                  <CheckCircle2 className="h-5 w-5 text-green-600 dark:text-green-400" />
+                  {dialogRequest.success && (
+                    <CheckCircle2 className="h-5 w-5 text-green-600 dark:text-green-400" />
+                  )}
                   {dialogRequest.title}
                 </DialogTitle>
                 <DialogDescription>{dialogRequest.message}</DialogDescription>
               </DialogHeader>
+              {dialogRequest.note && (
+                <p className="text-sm text-muted-foreground whitespace-pre-line">{dialogRequest.note}</p>
+              )}
               <div className="flex flex-col gap-2 pt-2">
                 {dialogRequest.actions.map((action) => (
                   <Button
                     key={action.id}
-                    variant={action.id === dialogRequest.actions[0]?.id ? 'default' : 'outline'}
+                    variant={action.id === dialogRequest.primaryAction ? 'default' : 'outline'}
                     className="w-full justify-center gap-2"
                     onClick={() => {
                       dialogRespondedRef.current = true
@@ -1629,6 +1949,19 @@ export default function App() {
                     {action.label}
                   </Button>
                 ))}
+                <Button
+                  variant="outline"
+                  className="w-full justify-center mt-2"
+                  onClick={() => {
+                    dialogRespondedRef.current = true
+                    manuallyStoppedRef.current = true
+                    setShowRebuildDialog(false)
+                    setDialogRequest(null)
+                    window.go.main.App.RespondToDialog('cancel')
+                  }}
+                >
+                  Cancel
+                </Button>
               </div>
             </>
           ) : (
