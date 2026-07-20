@@ -198,6 +198,54 @@ func (a *App) GetPartitionInfo() (*partition.SystemInfo, error) {
 	return mgr.GetSystemInfo(context.Background())
 }
 
+const lockDirMissingMessage = "Your reMarkable is missing a system lock it needs to change partitions. Rebooting may resolve this: restart it, then reconnect and try again."
+
+func (a *App) lockDirHealthy() bool {
+	if a.connectedDeviceType.IsPaperPro() {
+		return true
+	}
+	_, exec, err := a.getPartitionManager()
+	if err != nil {
+		return true
+	}
+	result, err := exec.Run(context.Background(), "sh", "-c", `d=$(readlink -f /var/lock 2>/dev/null); [ -d "$d" ] && [ -w "$d" ] && echo ok`)
+	if err != nil {
+		return true
+	}
+	return strings.TrimSpace(result.Stdout) == "ok"
+}
+
+func (a *App) ensureLockDir() bool {
+	if a.lockDirHealthy() {
+		return true
+	}
+
+	_, exec, err := a.getPartitionManager()
+	if err != nil {
+		return true
+	}
+
+	debug.Printf("[DEBUG] lock dir missing, recreating\n")
+	if _, err := exec.Run(context.Background(), "sh", "-c", `d=$(readlink -f /var/lock 2>/dev/null); [ -n "$d" ] || d=/run/lock; mkdir -p "$d" && chmod 1777 "$d"`); err != nil {
+		return false
+	}
+
+	return a.lockDirHealthy()
+}
+
+type OSManagerReadiness struct {
+	Ready   bool   `json:"ready"`
+	Code    string `json:"code,omitempty"`
+	Message string `json:"message,omitempty"`
+}
+
+func (a *App) CheckOSManagerReady() OSManagerReadiness {
+	if !a.ensureLockDir() {
+		return OSManagerReadiness{Ready: false, Code: apperrors.ErrLockDirMissing, Message: lockDirMissingMessage}
+	}
+	return OSManagerReadiness{Ready: true}
+}
+
 func (a *App) updateWritingTargetSlot() bool {
 	mgr, _, err := a.getPartitionManager()
 	if err != nil {
@@ -214,6 +262,10 @@ func (a *App) SwitchBootPartition(partitionNumber int) (*partition.SwitchResult,
 	if a.isInstallActive() || a.updateWritingTargetSlot() {
 		return nil, apperrors.New(apperrors.ErrUpdateInProgress,
 			"An OS update is still being written. Wait for it to finish before switching partitions.", nil, false)
+	}
+
+	if !a.ensureLockDir() {
+		return nil, apperrors.New(apperrors.ErrLockDirMissing, lockDirMissingMessage, nil, false)
 	}
 
 	mgr, _, err := a.getPartitionManager()
@@ -346,6 +398,11 @@ func (a *App) InstallOSVersion(version string) {
 
 		if a.updateWritingTargetSlot() {
 			runtime.EventsEmit(a.ctx, "software:install-error", map[string]string{"error": "An OS update is already in progress on the device. Wait for it to finish."})
+			return
+		}
+
+		if !a.ensureLockDir() {
+			runtime.EventsEmit(a.ctx, "software:install-error", map[string]string{"error": lockDirMissingMessage})
 			return
 		}
 
