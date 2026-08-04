@@ -844,9 +844,11 @@ func (a *App) InstallPackages(packageNames []string, deviceType string) {
 	go func() {
 		a.mu.Lock()
 		vc := a.vellumClient
+		a.mu.Unlock()
+		a.cancelMu.Lock()
 		a.installCancelCh = make(chan struct{})
 		cancelCh := a.installCancelCh
-		a.mu.Unlock()
+		a.cancelMu.Unlock()
 		if vc == nil {
 			runtime.EventsEmit(a.ctx, "install:complete", InstallResult{
 				Success: false,
@@ -856,11 +858,11 @@ func (a *App) InstallPackages(packageNames []string, deviceType string) {
 		}
 
 		defer func() {
-			a.mu.Lock()
+			a.cancelMu.Lock()
 			if a.installCancelCh == cancelCh {
 				a.installCancelCh = nil
 			}
-			a.mu.Unlock()
+			a.cancelMu.Unlock()
 		}()
 
 		isCancelled := func() bool {
@@ -1005,9 +1007,11 @@ func (a *App) UninstallPackages(packageNames []string, deviceType string) {
 	go func() {
 		a.mu.Lock()
 		vc := a.vellumClient
+		a.mu.Unlock()
+		a.cancelMu.Lock()
 		a.installCancelCh = make(chan struct{})
 		cancelCh := a.installCancelCh
-		a.mu.Unlock()
+		a.cancelMu.Unlock()
 		if vc == nil {
 			runtime.EventsEmit(a.ctx, "install:complete", InstallResult{
 				Success: false,
@@ -1017,11 +1021,11 @@ func (a *App) UninstallPackages(packageNames []string, deviceType string) {
 		}
 
 		defer func() {
-			a.mu.Lock()
+			a.cancelMu.Lock()
 			if a.installCancelCh == cancelCh {
 				a.installCancelCh = nil
 			}
-			a.mu.Unlock()
+			a.cancelMu.Unlock()
 		}()
 
 		isCancelled := func() bool {

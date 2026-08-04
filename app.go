@@ -137,39 +137,41 @@ func sanitizeFilename(name string) string {
 }
 
 type App struct {
-	ctx            context.Context
-	client         *ssh.Client
-	session        *ssh.Session
-	mu             sync.Mutex
-	connectCancel  context.CancelFunc
-	commandCancel  context.CancelFunc
-	commandSession *ssh.Session
-	commandStdin   io.WriteCloser
-	dialogResponse chan string
-	deviceStore    *storage.DeviceStore
-	settingsStore  *storage.SettingsStore
-	bundleStore      *storage.BundleStore
-	deviceInfoCache  *storage.DeviceInfoCacheStore
-	vellumClient   *vellum.Client
-	metadata       *vellum.MetadataStore
+	ctx             context.Context
+	client          *ssh.Client
+	session         *ssh.Session
+	mu              sync.Mutex
+	connectCancel   context.CancelFunc
+	commandCancel   context.CancelFunc
+	commandSession  *ssh.Session
+	commandStdin    io.WriteCloser
+	dialogResponse  chan string
+	deviceStore     *storage.DeviceStore
+	settingsStore   *storage.SettingsStore
+	bundleStore     *storage.BundleStore
+	deviceInfoCache *storage.DeviceInfoCacheStore
+	vellumClient    *vellum.Client
+	metadata        *vellum.MetadataStore
 
 	logger          *logger.Logger
 	operationLog    *logger.CommandLog
 	supportBundleID string
 
-	keepaliveStop          chan struct{}
-	keepaliveTrigger       chan struct{}
-	connectedDeviceID      string
-	connectedDeviceType    rmdevice.Type
-	connectedDeviceArch    rmdevice.Architecture
-	connectedFirmware      string
-	writeableRootBusy      bool
-	reconnecting           bool
-	reconnectMu            sync.Mutex
-	fastDialMode           bool
-	connGen                atomic.Uint64
-	currentConn            *connTarget
-	installCancelCh        chan struct{}
+	keepaliveStop       chan struct{}
+	keepaliveTrigger    chan struct{}
+	connectedDeviceID   string
+	connectedDeviceType rmdevice.Type
+	connectedDeviceArch rmdevice.Architecture
+	connectedFirmware   string
+	writeableRootBusy   bool
+	reconnecting        bool
+	reconnectMu         sync.Mutex
+	fastDialMode        bool
+	connGen             atomic.Uint64
+	currentConn         *connTarget
+	installCancelCh     chan struct{}
+	cancelMu            sync.Mutex
+	sessionMu              sync.Mutex
 	osInstallCancelCh      chan struct{}
 	installActive          bool
 	installSession         *installSession
@@ -364,8 +366,8 @@ func (a *App) RespondToDialog(response string) {
 }
 
 func (a *App) CancelInstallation() {
-	a.mu.Lock()
-	defer a.mu.Unlock()
+	a.cancelMu.Lock()
+	defer a.cancelMu.Unlock()
 	if a.installCancelCh != nil {
 		close(a.installCancelCh)
 		a.installCancelCh = nil
@@ -637,8 +639,8 @@ func (a *App) GetSettings() SettingsInfo {
 				ProxyMode:                  true,
 				SuppressSystemFileWarnings: false,
 
-				PreventSleep:               true,
-				CheckForUpdates:            true,
+				PreventSleep:    true,
+				CheckForUpdates: true,
 			},
 			TabVisibility: map[string]bool{"mods": true, "maintenance": true, "utilities": true},
 			Theme:         "system",
@@ -654,8 +656,8 @@ func (a *App) GetSettings() SettingsInfo {
 				ProxyMode:                  true,
 				SuppressSystemFileWarnings: false,
 
-				PreventSleep:               true,
-				CheckForUpdates:            true,
+				PreventSleep:    true,
+				CheckForUpdates: true,
 			},
 			TabVisibility: map[string]bool{"mods": true, "maintenance": true, "utilities": true},
 			Theme:         "system",

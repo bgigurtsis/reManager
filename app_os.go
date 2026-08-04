@@ -658,6 +658,8 @@ func (a *App) findPenInputDevice() (string, error) {
 	return device, nil
 }
 
+const penPokeTimeout = 5 * time.Second
+
 func (a *App) pokePenDevice(devicePath string, enter bool) error {
 	debug.Printf("[DEBUG] pokePenDevice: device=%s enter=%v\n", devicePath, enter)
 
@@ -697,7 +699,7 @@ fi`,
 		dist, devicePath,
 		devicePath)
 
-	_, err := a.runCommand(cmd)
+	_, err := a.runCommandWithTimeout(cmd, penPokeTimeout)
 	if err != nil {
 		debug.Printf("[DEBUG] pokePenDevice: command failed: %v\n", err)
 		return err
