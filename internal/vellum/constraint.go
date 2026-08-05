@@ -60,6 +60,59 @@ type PackageConflict struct {
 	Queued        bool   `json:"queued"`
 }
 
+type QueueConflictEntry struct {
+	QueueEntry string `json:"queueEntry"`
+	Package    string `json:"package"`
+	Blocks     string `json:"blocks"`
+}
+
+func (m *MetadataStore) AttributeConflictsToQueue(conflicts []ResolutionConflict, queue []string, deviceType, firmware, arch string) []QueueConflictEntry {
+	var entries []QueueConflictEntry
+	claimed := make(map[string]bool)
+
+	for _, conflict := range conflicts {
+		for _, participant := range []struct{ name, blocks string }{
+			{conflict.Package, conflict.Breaks},
+			{conflict.Breaks, conflict.Package},
+		} {
+			owner := m.queueEntryProviding(participant.name, queue, deviceType, firmware, arch)
+			if owner == "" || claimed[owner] {
+				continue
+			}
+			claimed[owner] = true
+			entries = append(entries, QueueConflictEntry{
+				QueueEntry: owner,
+				Package:    participant.name,
+				Blocks:     participant.blocks,
+			})
+		}
+	}
+	return entries
+}
+
+func (m *MetadataStore) queueEntryProviding(name string, queue []string, deviceType, firmware, arch string) string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	for _, queued := range queue {
+		if queued == name {
+			return queued
+		}
+	}
+	for _, queued := range queue {
+		_, info := m.bestVersion(queued, deviceType, firmware, arch)
+		if info == nil {
+			continue
+		}
+		for _, dep := range info.Depends {
+			if ParseConstraint(dep).Name == name {
+				return queued
+			}
+		}
+	}
+	return ""
+}
+
 type presentPackage struct {
 	name      string
 	version   string

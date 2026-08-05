@@ -388,6 +388,63 @@ func (c *Client) SimulateAdd(packages ...string) ([]string, error) {
 	return parseSimulationOutput(output), nil
 }
 
+var conflictSubjectRegex = regexp.MustCompile(`^\s{2}(\S+?)-[^-\s]+-r\d+:\s*$`)
+var conflictBreaksRegex = regexp.MustCompile(`breaks:\s+(\S+?)-[^-\s\[]+-r\d+`)
+
+type ResolutionConflict struct {
+	Package string
+	Breaks  string
+}
+
+func ParseResolutionConflicts(message string) []ResolutionConflict {
+	var conflicts []ResolutionConflict
+	seen := make(map[string]bool)
+	subject := ""
+
+	for _, line := range strings.Split(message, "\n") {
+		if match := conflictSubjectRegex.FindStringSubmatch(line); match != nil {
+			subject = match[1]
+			continue
+		}
+		match := conflictBreaksRegex.FindStringSubmatch(line)
+		if match == nil || subject == "" {
+			continue
+		}
+
+		key := subject + "\x00" + match[1]
+		if subject > match[1] {
+			key = match[1] + "\x00" + subject
+		}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		conflicts = append(conflicts, ResolutionConflict{Package: subject, Breaks: match[1]})
+	}
+	return conflicts
+}
+
+func ResolutionFailure(err error) string {
+	if err == nil {
+		return ""
+	}
+
+	message := err.Error()
+	if !strings.Contains(message, "unable to select packages") &&
+		!strings.Contains(message, "unable to satisfy") {
+		return ""
+	}
+
+	var lines []string
+	for _, line := range strings.Split(message, "\n") {
+		if strings.Contains(line, "satisfies: world[") {
+			continue
+		}
+		lines = append(lines, strings.TrimPrefix(line, "ERROR: "))
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
 // SimulateDelResult contains the result of simulating a package deletion
 type SimulateDelResult struct {
 	Packages []string            // packages that would be removed

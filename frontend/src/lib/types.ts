@@ -72,9 +72,17 @@ export interface DialogRequest {
   actions: DialogActionRequest[]
 }
 
+export interface QueueConflictEntry {
+  queueEntry: string
+  package: string
+  blocks: string
+}
+
 export interface InstallSimulationResult {
   packages: string[]
   requested: string[]
+  error?: string
+  conflicts?: QueueConflictEntry[]
 }
 
 export interface UninstallSimulationResult {

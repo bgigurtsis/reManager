@@ -824,6 +824,13 @@ export default function App() {
 
     try {
       const sim = await window.go.main.App.SimulateInstall(requested, device)
+      if (sim.error) {
+        const pair = sim.conflicts?.[0]
+        setQueueError(pair
+          ? `${pair.package} and ${pair.blocks} can't be installed together. Remove one of them from your install queue.`
+          : "Some queued packages can't be installed together.")
+        return
+      }
       const filteredPackages = sim.packages.filter((name: string) => !installedPackages.has(name))
       if (filteredPackages.length === 0) {
         showNothingToDo()

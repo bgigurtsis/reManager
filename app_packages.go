@@ -108,8 +108,10 @@ type InstallResult struct {
 }
 
 type InstallSimulationResult struct {
-	Packages  []string `json:"packages"`
-	Requested []string `json:"requested"`
+	Packages  []string                    `json:"packages"`
+	Requested []string                    `json:"requested"`
+	Error     string                      `json:"error,omitempty"`
+	Conflicts []vellum.QueueConflictEntry `json:"conflicts,omitempty"`
 }
 
 type UninstallSimulationResult struct {
@@ -669,7 +671,22 @@ func (a *App) SimulateInstall(packageNames []string, deviceType string) (*Instal
 	allPackages, err := a.vellumClient.SimulateAdd(packageNames...)
 	if err != nil {
 		debug.Printf("[DEBUG] SimulateAdd failed: %v, using packageNames only\n", err)
-		return &InstallSimulationResult{Packages: packageNames, Requested: packageNames}, nil
+		failure := vellum.ResolutionFailure(err)
+		result := &InstallSimulationResult{
+			Packages:  packageNames,
+			Requested: packageNames,
+			Error:     failure,
+		}
+		if failure != "" && a.metadata != nil && a.metadata.Ready() {
+			firmware := ""
+			if osState, osErr := a.vellumClient.GetOSVersionState(); osErr == nil {
+				firmware = osState.CurrentVersion
+			}
+			arch := commands.GetDownloadArch(a.connectedDeviceArch)
+			result.Conflicts = a.metadata.AttributeConflictsToQueue(
+				vellum.ParseResolutionConflicts(failure), packageNames, deviceType, firmware, arch)
+		}
+		return result, nil
 	}
 
 	if len(allPackages) == 0 {
