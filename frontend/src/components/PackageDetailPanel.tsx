@@ -6,6 +6,11 @@ import { StatusBadge } from '@/components/StatusBadge'
 import { PackageInfo } from '@/lib/types'
 import { formatOsRange } from '@/lib/format'
 
+function conflictName(entry: string): string {
+  const match = entry.match(/^(.+?)(>=|<=|=|>|<)/)
+  return match ? match[1] : entry
+}
+
 interface PackageDetailPanelProps {
   pkg: PackageInfo
   isInstalled: boolean
@@ -204,17 +209,21 @@ export function PackageDetailPanel({
               <dt className="text-muted-foreground col-span-2 mt-2 border-t pt-3">Conflicts</dt>
               <dd className="col-span-2">
                 <ul className="space-y-1">
-                  {pkg.conflicts.map((conflict) => {
-                    const conflictInstalled = installedPackages.has(conflict)
+                  {pkg.conflicts.map((entry) => {
+                    const name = conflictName(entry)
+                    const constraint = entry.slice(name.length)
                     return (
-                      <li key={conflict} className="flex items-center gap-2">
+                      <li key={entry} className="flex items-center gap-2">
                         <button
-                          onClick={() => onSelectPackage(conflict)}
+                          onClick={() => onSelectPackage(name)}
                           className="text-primary hover:underline text-left"
                         >
-                          {conflict}
+                          {name}
                         </button>
-                        {conflictInstalled && (
+                        {constraint && (
+                          <span className="text-xs text-muted-foreground font-mono">{constraint}</span>
+                        )}
+                        {installedPackages.has(name) && (
                           <span className="inline-flex items-center gap-1 text-xs text-destructive">
                             <AlertTriangle className="h-3 w-3" />
                             installed

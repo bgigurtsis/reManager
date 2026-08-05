@@ -138,6 +138,11 @@ export interface ProviderOption {
   osConstraints: { version: string; operator: '>=' | '<' | '>' | '<=' | '=' }[] | null
 }
 
+export interface PackageConflict {
+  conflictsWith: string
+  queued: boolean
+}
+
 export interface VirtualChoice {
   virtual: string
   requiredBy: string[]

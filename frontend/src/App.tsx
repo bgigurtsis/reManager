@@ -34,7 +34,7 @@ import { Banner } from '@/components/ui/banner'
 import { Loader2, Check, AlertTriangle, AlertCircle, WifiOff, Info, CheckCircle2, BookOpen, Cpu } from 'lucide-react'
 import { Checkbox } from '@/components/ui/checkbox'
 import { formatOsRange, launcherSelected } from '@/lib/format'
-import { PackageInfo, CompatibilityResult, MaintenanceCommandInfo, SystemTaskInfo, SSHKey, SavedDevice, UpdateServiceStatus, InstallSimulationResult, UninstallSimulationResult, InstalledPackagesResult, HashtabVersionStatus, TimezoneStatus, VirtualChoice, Step } from '@/lib/types'
+import { PackageInfo, CompatibilityResult, MaintenanceCommandInfo, SystemTaskInfo, SSHKey, SavedDevice, UpdateServiceStatus, InstallSimulationResult, UninstallSimulationResult, InstalledPackagesResult, HashtabVersionStatus, TimezoneStatus, VirtualChoice, PackageConflict, Step } from '@/lib/types'
 
 declare global {
   interface Window {
@@ -99,6 +99,7 @@ declare global {
           UninstallPackages(packageNames: string[], deviceType: string): Promise<void>
           SimulateInstall(packageNames: string[], deviceType: string): Promise<InstallSimulationResult>
           GetInstallChoices(packageNames: string[], deviceType: string): Promise<VirtualChoice[]>
+          GetPackageConflicts(installed: Record<string, string>, queue: string[], deviceType: string, firmware: string): Promise<Record<string, PackageConflict>>
           SimulateUninstall(packageNames: string[]): Promise<UninstallSimulationResult>
           RunMaintenanceCommand(pkgName: string, commandId: string, deviceType: string): Promise<void>
           RunSystemTask(taskId: string, deviceType: string): Promise<void>

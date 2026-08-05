@@ -706,6 +706,17 @@ func (a *App) GetInstallChoices(packageNames []string, deviceType string) []vell
 	return choices
 }
 
+func (a *App) GetPackageConflicts(installed map[string]string, queue []string, deviceType, firmware string) map[string]vellum.PackageConflict {
+	if a.metadata == nil || !a.metadata.Ready() {
+		return map[string]vellum.PackageConflict{}
+	}
+
+	arch := commands.GetDownloadArch(a.connectedDeviceArch)
+	conflicts := a.metadata.FindConflicts(installed, queue, deviceType, firmware, arch)
+	debug.Printf("[DEBUG] GetPackageConflicts: %d conflict(s) for queue %v\n", len(conflicts), queue)
+	return conflicts
+}
+
 func (a *App) SimulateUninstall(packageNames []string) (*UninstallSimulationResult, error) {
 	if a.vellumClient == nil {
 		return &UninstallSimulationResult{Packages: packageNames}, nil

@@ -877,12 +877,4 @@ func isVersionCompatible(info PackageVersion, deviceType, firmware, arch string)
 	return true
 }
 
-func stripDepVersion(dep string) string {
-	for _, op := range []string{">=", "<=", "=", ">", "<"} {
-		if i := strings.Index(dep, op); i > 0 {
-			return dep[:i]
-		}
-	}
-	return dep
-}
 
