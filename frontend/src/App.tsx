@@ -735,12 +735,22 @@ export default function App() {
     }
   }, [pendingOxideInfo])
 
-  const continueInstall = (pkgs: string[]) => {
-    if (pkgs.includes('oxide') && !installedPackages.has('oxide')) {
-      setPendingOxideInfo(pkgs)
-    } else {
-      handleInstallQueue(pkgs)
+  const tripletapInstallable = async (pkgs: string[]) => {
+    try {
+      const sim = await window.go.main.App.SimulateInstall([...pkgs, 'tripletap'], device)
+      return !sim.error
+    } catch (err) {
+      console.error('tripletap conflict check failed:', err)
+      return true
     }
+  }
+
+  const continueInstall = async (pkgs: string[]) => {
+    if (pkgs.includes('xovi') && !installedPackages.has('xovi') && await tripletapInstallable(pkgs)) {
+      setPendingXoviInfo(pkgs)
+      return
+    }
+    handleInstallQueue(pkgs)
   }
 
 
@@ -1559,8 +1569,8 @@ export default function App() {
                   <Button onClick={() => {
                     const pkgs = pendingInstallConfirm.packages
                     setPendingInstallConfirm(null)
-                    if (pkgs.includes('xovi') && !installedPackages.has('xovi')) {
-                      setPendingXoviInfo(pkgs)
+                    if (pkgs.includes('oxide') && !installedPackages.has('oxide')) {
+                      setPendingOxideInfo(pkgs)
                     } else {
                       continueInstall(pkgs)
                     }
@@ -1634,7 +1644,7 @@ export default function App() {
                             ? [...pendingXoviInfo, 'tripletap']
                             : pendingXoviInfo
                           setPendingXoviInfo(null)
-                          continueInstall(pkgs)
+                          handleInstallQueue(pkgs)
                         }}
                       >
                         Continue
@@ -1676,7 +1686,7 @@ export default function App() {
                         onClick={() => {
                           const pkgs = pendingXoviInfo
                           setPendingXoviInfo(null)
-                          continueInstall(pkgs)
+                          handleInstallQueue(pkgs)
                         }}
                       >
                         Continue
@@ -1750,7 +1760,7 @@ export default function App() {
                             ? [...pendingOxideInfo, 'launcherctl-oxide']
                             : pendingOxideInfo
                           setPendingOxideInfo(null)
-                          handleInstallQueue(pkgs)
+                          continueInstall(pkgs)
                         }}
                       >
                         Continue
@@ -1792,7 +1802,7 @@ export default function App() {
                         onClick={() => {
                           const pkgs = pendingOxideInfo
                           setPendingOxideInfo(null)
-                          handleInstallQueue(pkgs)
+                          continueInstall(pkgs)
                         }}
                       >
                         Continue
