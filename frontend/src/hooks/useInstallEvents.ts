@@ -64,6 +64,8 @@ export function useInstallEvents({
 
   const setInstallQueueRef = useRef(setInstallQueue)
   useEffect(() => { setInstallQueueRef.current = setInstallQueue }, [setInstallQueue])
+  const lastOperationTypeRef = useRef(lastOperationType)
+  useEffect(() => { lastOperationTypeRef.current = lastOperationType }, [lastOperationType])
 
   const setXochitlRunningRef = useRef(setXochitlRunning)
   useEffect(() => { setXochitlRunningRef.current = setXochitlRunning }, [setXochitlRunning])
@@ -161,7 +163,9 @@ export function useInstallEvents({
       setProgressStatus('')
       setDialogRequest(null)
       setRunningHookTitle(null)
-      setInstallQueueRef.current(new Set())
+      if (lastOperationTypeRef.current !== 'uninstall') {
+        setInstallQueueRef.current(new Set())
+      }
     })
 
     const unsubscribeDialog = window.runtime.EventsOn('hook:dialog', (...args: unknown[]) => {
