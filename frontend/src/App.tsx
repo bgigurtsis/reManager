@@ -1112,7 +1112,7 @@ export default function App() {
 
   return (
     <AppProvider value={appContextValue}>
-    <div className="min-h-screen p-6">
+    <div className="min-h-screen p-6" style={{ paddingBottom: 'calc(1.5rem + var(--queue-bar-height, 0px))' }}>
       <div className="space-y-6">
         <PageHeader
           device={device}

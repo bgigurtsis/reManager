@@ -308,6 +308,26 @@ export function ModsTab({
     return () => { stale = true; window.clearTimeout(timer) }
   }, [installQueue, installedKey, device, connectionStatus])
 
+  const queueBarRef = useRef<HTMLDivElement>(null)
+  const queueVisible = installQueue.size > 0 || uninstallQueue.size > 0
+
+  useEffect(() => {
+    const root = document.documentElement
+    const el = queueBarRef.current
+    if (!el) {
+      root.style.setProperty('--queue-bar-height', '0px')
+      return
+    }
+    const apply = () => root.style.setProperty('--queue-bar-height', `${el.offsetHeight}px`)
+    apply()
+    const observer = new ResizeObserver(apply)
+    observer.observe(el)
+    return () => {
+      observer.disconnect()
+      root.style.setProperty('--queue-bar-height', '0px')
+    }
+  }, [queueVisible])
+
   const [queueOpen, setQueueOpen] = useState('')
 
   const conflictPairs = useMemo(() => {
@@ -559,7 +579,7 @@ export function ModsTab({
             terminalTheme={resolvedTerminalTheme}
           />
         ) : osMismatchDetected ? (
-          <div className={uninstallQueue.size > 0 ? 'pb-48' : ''}>
+          <div>
             {compatibilityStatus ? (
               <UpgradeChecklist
                 storedOsVersion={compatibilityStatus.storedOsVersion || storedOsVersion}
@@ -597,7 +617,7 @@ export function ModsTab({
             )}
           </div>
         ) : (
-        <div className={`space-y-6 ${(installQueue.size > 0 || uninstallQueue.size > 0) ? 'pb-48' : ''}`}>
+        <div className="space-y-6">
             {/* Filters */}
             <div className="flex flex-wrap gap-2">
               <div className="flex gap-2 w-full md:contents">
@@ -878,7 +898,7 @@ export function ModsTab({
 
       {/* Queue Section - Fixed at bottom, visible on all tabs */}
       {(installQueue.size > 0 || uninstallQueue.size > 0) && (
-        <div className="fixed bottom-0 left-0 right-0 py-4 px-6 bg-background border-t shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] z-50 space-y-4 max-h-[85vh] overflow-y-auto overscroll-y-contain">
+        <div ref={queueBarRef} className="fixed bottom-0 left-0 right-0 py-4 px-6 bg-background border-t shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] z-50 space-y-4 max-h-[85vh] overflow-y-auto overscroll-y-contain">
           {/* Install Queue */}
           {installQueue.size > 0 && (
             <div>
