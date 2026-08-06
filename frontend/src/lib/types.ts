@@ -85,6 +85,11 @@ export interface InstallSimulationResult {
   conflicts?: QueueConflictEntry[]
 }
 
+export interface InstallSet {
+  resolved: string[]
+  requested: string[]
+}
+
 export interface UninstallSimulationResult {
   packages: string[]
   blocked: Record<string, string[]> | null

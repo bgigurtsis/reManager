@@ -34,7 +34,7 @@ import { Banner } from '@/components/ui/banner'
 import { Loader2, Check, AlertTriangle, AlertCircle, WifiOff, Info, CheckCircle2, BookOpen, Cpu } from 'lucide-react'
 import { Checkbox } from '@/components/ui/checkbox'
 import { formatOsRange, launcherSelected } from '@/lib/format'
-import { PackageInfo, CompatibilityResult, MaintenanceCommandInfo, SystemTaskInfo, SSHKey, SavedDevice, UpdateServiceStatus, InstallSimulationResult, UninstallSimulationResult, InstalledPackagesResult, HashtabVersionStatus, TimezoneStatus, VirtualChoice, PackageConflict, Step, TransferSnapshot } from '@/lib/types'
+import { PackageInfo, CompatibilityResult, MaintenanceCommandInfo, SystemTaskInfo, SSHKey, SavedDevice, UpdateServiceStatus, InstallSimulationResult, InstallSet, UninstallSimulationResult, InstalledPackagesResult, HashtabVersionStatus, TimezoneStatus, VirtualChoice, PackageConflict, Step, TransferSnapshot } from '@/lib/types'
 
 declare global {
   interface Window {
@@ -95,7 +95,7 @@ declare global {
           GetSystemTasksInfo(): Promise<SystemTaskInfo[]>
           GetDeviceDisplayName(machine: string): Promise<string>
           GetDeviceArchitecture(deviceType: string): Promise<string>
-          InstallPackages(packageNames: string[], deviceType: string): Promise<void>
+          InstallPackages(requested: string[], resolved: string[], deviceType: string): Promise<void>
           UninstallPackages(packageNames: string[], deviceType: string): Promise<void>
           SimulateInstall(packageNames: string[], deviceType: string): Promise<InstallSimulationResult>
           GetInstallChoices(packageNames: string[], deviceType: string): Promise<VirtualChoice[]>
@@ -295,8 +295,8 @@ export default function App() {
     const recommended = step?.providers.find(p => p.name === step.default && p.compatible)
     setProviderSelection(recommended?.name ?? null)
   }, [pendingProviderChoice])
-  const [pendingXoviInfo, setPendingXoviInfo] = useState<string[] | null>(null)
-  const [pendingOxideInfo, setPendingOxideInfo] = useState<string[] | null>(null)
+  const [pendingXoviInfo, setPendingXoviInfo] = useState<InstallSet | null>(null)
+  const [pendingOxideInfo, setPendingOxideInfo] = useState<InstallSet | null>(null)
   const [launcherctlDecision, setLauncherctlDecision] = useState<'yes' | 'no' | null>(null)
   const [oxideAckChecked, setOxideAckChecked] = useState(false)
   const [tripletapDecision, setTripletapDecision] = useState<'yes' | 'no' | null>(null)
@@ -748,12 +748,17 @@ export default function App() {
     }
   }
 
-  const continueInstall = async (pkgs: string[]) => {
-    if (pkgs.includes('xovi') && !installedPackages.has('xovi') && await tripletapInstallable(pkgs)) {
-      setPendingXoviInfo(pkgs)
+  const withPick = (set: InstallSet, pick: string): InstallSet => ({
+    resolved: [...set.resolved, pick],
+    requested: [...set.requested, pick],
+  })
+
+  const continueInstall = async (set: InstallSet) => {
+    if (set.resolved.includes('xovi') && !installedPackages.has('xovi') && await tripletapInstallable(set.resolved)) {
+      setPendingXoviInfo(set)
       return
     }
-    handleInstallQueue(pkgs)
+    handleInstallQueue(set)
   }
 
 
@@ -861,8 +866,10 @@ export default function App() {
     }
   }
 
-  const handleInstallQueue = async (allPackages?: string[]) => {
-    const toInstall = allPackages || Array.from(installQueue).filter((name) => !installedPackages.has(name))
+  const handleInstallQueue = async (set?: InstallSet) => {
+    const queued = Array.from(installQueue).filter((name) => !installedPackages.has(name))
+    const toInstall = set?.resolved ?? queued
+    const toPin = set?.requested ?? queued
 
     if (toInstall.length === 0) {
       setInstallQueue(new Set())
@@ -881,7 +888,7 @@ export default function App() {
     setCommandContext('install')
     setLastOperationType('install')
 
-    await window.go.main.App.InstallPackages(toInstall, device)
+    await window.go.main.App.InstallPackages(toPin, toInstall, device)
     setInstallQueue(new Set())
   }
 
@@ -1570,12 +1577,15 @@ export default function App() {
                     Cancel
                   </Button>
                   <Button onClick={() => {
-                    const pkgs = pendingInstallConfirm.packages
+                    const set: InstallSet = {
+                      resolved: pendingInstallConfirm.packages,
+                      requested: pendingInstallConfirm.requested?.length ? pendingInstallConfirm.requested : pendingInstallConfirm.packages,
+                    }
                     setPendingInstallConfirm(null)
-                    if (pkgs.includes('oxide') && !installedPackages.has('oxide')) {
-                      setPendingOxideInfo(pkgs)
+                    if (set.resolved.includes('oxide') && !installedPackages.has('oxide')) {
+                      setPendingOxideInfo(set)
                     } else {
-                      continueInstall(pkgs)
+                      continueInstall(set)
                     }
                   }}>
                     Install ({pendingInstallConfirm.packages.length})
@@ -1588,7 +1598,7 @@ export default function App() {
           {/* Pre-install xovi info */}
           {pendingXoviInfo !== null && !installing && !uninstalling && (() => {
             const tripletapInstalled = installedPackages.has('tripletap')
-            const tripletapQueued = pendingXoviInfo.includes('tripletap')
+            const tripletapQueued = pendingXoviInfo.resolved.includes('tripletap')
             const showAckScreen = tripletapQueued || tripletapInstalled
             return (
               <>
@@ -1643,11 +1653,11 @@ export default function App() {
                       <Button
                         disabled={tripletapDecision === null}
                         onClick={() => {
-                          const pkgs = tripletapDecision === 'yes'
-                            ? [...pendingXoviInfo, 'tripletap']
+                          const set = tripletapDecision === 'yes'
+                            ? withPick(pendingXoviInfo, 'tripletap')
                             : pendingXoviInfo
                           setPendingXoviInfo(null)
-                          handleInstallQueue(pkgs)
+                          handleInstallQueue(set)
                         }}
                       >
                         Continue
@@ -1687,9 +1697,9 @@ export default function App() {
                       <Button
                         disabled={!xoviAckChecked}
                         onClick={() => {
-                          const pkgs = pendingXoviInfo
+                          const set = pendingXoviInfo
                           setPendingXoviInfo(null)
-                          handleInstallQueue(pkgs)
+                          handleInstallQueue(set)
                         }}
                       >
                         Continue
@@ -1704,7 +1714,7 @@ export default function App() {
           {/* Pre-install oxide info */}
           {pendingOxideInfo !== null && !installing && !uninstalling && (() => {
             const switchingInstalled = installedPackages.has('launcherctl-oxide')
-            const switchingQueued = pendingOxideInfo.includes('launcherctl-oxide')
+            const switchingQueued = pendingOxideInfo.resolved.includes('launcherctl-oxide')
             const showAckScreen = switchingQueued || switchingInstalled
             return (
               <>
@@ -1759,11 +1769,11 @@ export default function App() {
                       <Button
                         disabled={launcherctlDecision === null}
                         onClick={() => {
-                          const pkgs = launcherctlDecision === 'yes'
-                            ? [...pendingOxideInfo, 'launcherctl-oxide']
+                          const set = launcherctlDecision === 'yes'
+                            ? withPick(pendingOxideInfo, 'launcherctl-oxide')
                             : pendingOxideInfo
                           setPendingOxideInfo(null)
-                          continueInstall(pkgs)
+                          continueInstall(set)
                         }}
                       >
                         Continue
@@ -1803,9 +1813,9 @@ export default function App() {
                       <Button
                         disabled={!oxideAckChecked}
                         onClick={() => {
-                          const pkgs = pendingOxideInfo
+                          const set = pendingOxideInfo
                           setPendingOxideInfo(null)
-                          continueInstall(pkgs)
+                          continueInstall(set)
                         }}
                       >
                         Continue

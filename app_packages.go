@@ -865,7 +865,11 @@ func (a *App) resolveWorldDeps(targets []string) (worldToRemove []string, allAff
 	return worldToRemove, allAffected, nil
 }
 
-func (a *App) InstallPackages(packageNames []string, deviceType string) {
+func (a *App) InstallPackages(requested []string, resolved []string, deviceType string) {
+	if len(resolved) == 0 {
+		resolved = requested
+	}
+	packageNames := requested
 	if a.logger != nil {
 		a.logger.LogInstall("install", strings.Join(packageNames, ", "), "started")
 	}
@@ -951,7 +955,7 @@ func (a *App) InstallPackages(packageNames []string, deviceType string) {
 				return
 			}
 		} else {
-			allPackages = packageNames
+			allPackages = resolved
 		}
 
 		if isCancelled() {
