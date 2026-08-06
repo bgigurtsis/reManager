@@ -231,6 +231,9 @@ func (a *App) RunCommandWithOutput(cmd string, requiresPTY bool) {
 			cmdLog.WriteExitCode(err)
 		}
 		debug.Println("[DEBUG] Command done, success:", err == nil)
+		if a.vellumClient != nil {
+			a.vellumClient.InvalidateInstalledCache()
+		}
 		runtime.EventsEmit(a.ctx, "command:done", err == nil)
 	}()
 }
