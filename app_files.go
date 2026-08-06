@@ -553,6 +553,89 @@ func (a *App) countLocalFolder(localPath string) (int, int64, error) {
 	return filesTotal, bytesTotal, err
 }
 
+const uploadTempSuffix = ".remanager-tmp"
+
+const maxRemoteFilenameLength = 255
+
+type remoteFileWriter struct {
+	sftpClient   *sftp.Client
+	file         *sftp.File
+	tempPath     string
+	destPath     string
+	replacedPerm *fs.FileMode
+}
+
+func remoteTempPath(destPath string) string {
+	dir, name := path.Split(destPath)
+	if len(name)+len(uploadTempSuffix) > maxRemoteFilenameLength {
+		name = name[:maxRemoteFilenameLength-len(uploadTempSuffix)]
+	}
+	return dir + name + uploadTempSuffix
+}
+
+func resolveSymlinkedPath(sftpClient *sftp.Client, remotePath string) (string, error) {
+	info, err := sftpClient.Lstat(remotePath)
+	if err != nil || info.Mode()&fs.ModeSymlink == 0 {
+		return remotePath, nil
+	}
+	return sftpClient.RealPath(remotePath)
+}
+
+func openRemoteFileForReplace(sftpClient *sftp.Client, destPath string) (*remoteFileWriter, error) {
+	destPath, err := resolveSymlinkedPath(sftpClient, destPath)
+	if err != nil {
+		return nil, err
+	}
+
+	writer := &remoteFileWriter{sftpClient: sftpClient, destPath: destPath}
+
+	if info, err := sftpClient.Stat(destPath); err == nil && info.Mode().IsRegular() {
+		perm := info.Mode().Perm()
+		writer.replacedPerm = &perm
+	}
+
+	tempPath := remoteTempPath(destPath)
+	_ = sftpClient.Remove(tempPath)
+
+	file, err := sftpClient.Create(tempPath)
+	if err != nil {
+		return nil, err
+	}
+
+	writer.file = file
+	writer.tempPath = tempPath
+	return writer, nil
+}
+
+func (w *remoteFileWriter) Write(p []byte) (int, error) {
+	return w.file.Write(p)
+}
+
+func (w *remoteFileWriter) Commit() error {
+	if err := w.file.Close(); err != nil {
+		_ = w.sftpClient.Remove(w.tempPath)
+		return err
+	}
+
+	if w.replacedPerm != nil {
+		if err := w.sftpClient.Chmod(w.tempPath, *w.replacedPerm); err != nil {
+			_ = w.sftpClient.Remove(w.tempPath)
+			return err
+		}
+	}
+
+	if err := w.sftpClient.PosixRename(w.tempPath, w.destPath); err != nil {
+		_ = w.sftpClient.Remove(w.tempPath)
+		return err
+	}
+	return nil
+}
+
+func (w *remoteFileWriter) Abort() {
+	_ = w.file.Close()
+	_ = w.sftpClient.Remove(w.tempPath)
+}
+
 func (a *App) uploadFolderRecursive(sftpClient *sftp.Client, localPath, remotePath string, filesDone *int, bytesDone *int64, filesTotal int, bytesTotal int64, failedFiles *[]string, cancelCh chan struct{}) error {
 	select {
 	case <-cancelCh:
@@ -607,17 +690,17 @@ func (a *App) uploadFolderRecursive(sftpClient *sftp.Client, localPath, remotePa
 	}
 	defer localFile.Close()
 
-	remoteFile, err := sftpClient.Create(remotePath)
+	remoteFile, err := openRemoteFileForReplace(sftpClient, remotePath)
 	if err != nil {
 		*failedFiles = append(*failedFiles, localPath)
 		return nil
 	}
-	defer remoteFile.Close()
 
 	buffer := make([]byte, 32*1024)
 	for {
 		select {
 		case <-cancelCh:
+			remoteFile.Abort()
 			return fmt.Errorf("cancelled")
 		default:
 		}
@@ -625,6 +708,7 @@ func (a *App) uploadFolderRecursive(sftpClient *sftp.Client, localPath, remotePa
 		n, err := localFile.Read(buffer)
 		if n > 0 {
 			if _, writeErr := remoteFile.Write(buffer[:n]); writeErr != nil {
+				remoteFile.Abort()
 				*failedFiles = append(*failedFiles, localPath)
 				return nil
 			}
@@ -635,9 +719,15 @@ func (a *App) uploadFolderRecursive(sftpClient *sftp.Client, localPath, remotePa
 			break
 		}
 		if err != nil {
+			remoteFile.Abort()
 			*failedFiles = append(*failedFiles, localPath)
 			return nil
 		}
+	}
+
+	if err := remoteFile.Commit(); err != nil {
+		*failedFiles = append(*failedFiles, localPath)
+		return nil
 	}
 
 	*filesDone++
@@ -783,7 +873,7 @@ func (a *App) uploadMixedPaths(client *ssh.Client, localPaths []string, remotePa
 				continue
 			}
 
-			remoteFile, err := sftpClient.Create(destPath)
+			remoteFile, err := openRemoteFileForReplace(sftpClient, destPath)
 			if err != nil {
 				localFile.Close()
 				failedFiles = append(failedFiles, localPath)
@@ -791,6 +881,7 @@ func (a *App) uploadMixedPaths(client *ssh.Client, localPaths []string, remotePa
 			}
 
 			buffer := make([]byte, 32*1024)
+			uploaded := false
 			for {
 				n, err := localFile.Read(buffer)
 				if n > 0 {
@@ -802,8 +893,7 @@ func (a *App) uploadMixedPaths(client *ssh.Client, localPaths []string, remotePa
 					a.emitFolderProgress(info.Name(), filesDone, filesTotal, bytesDone, bytesTotal, "uploading", containsFolder)
 				}
 				if err == io.EOF {
-					filesDone++
-					a.emitFolderProgress(info.Name(), filesDone, filesTotal, bytesDone, bytesTotal, "uploading", containsFolder)
+					uploaded = true
 					break
 				}
 				if err != nil {
@@ -812,7 +902,17 @@ func (a *App) uploadMixedPaths(client *ssh.Client, localPaths []string, remotePa
 				}
 			}
 			localFile.Close()
-			remoteFile.Close()
+
+			if !uploaded {
+				remoteFile.Abort()
+				continue
+			}
+			if err := remoteFile.Commit(); err != nil {
+				failedFiles = append(failedFiles, localPath)
+				continue
+			}
+			filesDone++
+			a.emitFolderProgress(info.Name(), filesDone, filesTotal, bytesDone, bytesTotal, "uploading", containsFolder)
 		}
 	}
 
@@ -853,11 +953,10 @@ func (a *App) uploadSingleFile(client *ssh.Client, sftpClient *sftp.Client, loca
 		defer a.restoreFilesystemDeferred(client)
 	}
 
-	remoteFile, err := sftpClient.Create(destPath)
+	remoteFile, err := openRemoteFileForReplace(sftpClient, destPath)
 	if err != nil {
 		return fmt.Errorf("failed to create remote file: %v", err)
 	}
-	defer remoteFile.Close()
 
 	buffer := make([]byte, 32*1024)
 	var transferred int64
@@ -867,6 +966,7 @@ func (a *App) uploadSingleFile(client *ssh.Client, sftpClient *sftp.Client, loca
 		if n > 0 {
 			_, writeErr := remoteFile.Write(buffer[:n])
 			if writeErr != nil {
+				remoteFile.Abort()
 				return fmt.Errorf("failed to write to remote file: %v", writeErr)
 			}
 			transferred += int64(n)
@@ -887,8 +987,13 @@ func (a *App) uploadSingleFile(client *ssh.Client, sftpClient *sftp.Client, loca
 			break
 		}
 		if err != nil {
+			remoteFile.Abort()
 			return fmt.Errorf("failed to read local file: %v", err)
 		}
+	}
+
+	if err := remoteFile.Commit(); err != nil {
+		return fmt.Errorf("failed to finalize remote file: %v", err)
 	}
 
 	runtime.EventsEmit(a.ctx, "filebrowser:progress", TransferProgress{
