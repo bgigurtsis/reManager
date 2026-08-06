@@ -165,3 +165,28 @@ export interface CompatibilityResult {
   fetchFailed: boolean
   statusMap: Record<string, string>
 }
+
+export interface TransferView {
+  id: string
+  kind: 'upload' | 'download'
+  name: string
+  state: 'queued' | 'starting' | 'running' | 'done' | 'failed' | 'canceled'
+  bytesDone: number
+  bytesTotal: number
+  filesDone: number
+  filesTotal: number
+  percentage: number
+  error?: string
+  failedFiles?: string[]
+  isDir: boolean
+}
+
+export interface TransferSnapshot {
+  transfers: TransferView[]
+  activeCount: number
+  bytesDone: number
+  bytesTotal: number
+  percentage: number
+  bytesPerSecond: number
+  secondsRemaining: number
+}

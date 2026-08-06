@@ -171,14 +171,21 @@ type App struct {
 	currentConn         *connTarget
 	installCancelCh     chan struct{}
 	cancelMu            sync.Mutex
-	sessionMu              sync.Mutex
-	osInstallCancelCh      chan struct{}
-	installActive          bool
-	installSession         *installSession
-	backupCancelCh         chan struct{}
-	backupMu               sync.Mutex
-	folderTransferCancelCh chan struct{}
-	folderTransferMu       sync.Mutex
+	sessionMu           sync.Mutex
+	osInstallCancelCh   chan struct{}
+	installActive       bool
+	installSession      *installSession
+	backupCancelCh      chan struct{}
+	backupMu            sync.Mutex
+
+	transfers    *transferManager
+	transferOnce sync.Once
+	roundTrip    time.Duration
+	roundTripGen uint64
+	roundTripMu  sync.Mutex
+
+	writableRootCount int
+	writableRootMu    sync.Mutex
 
 	agentConn net.Conn
 
@@ -290,25 +297,6 @@ func (a *App) shutdown(ctx context.Context) {
 	if a.logger != nil {
 		a.logger.Close()
 	}
-}
-
-type TransferProgress struct {
-	Filename   string  `json:"filename"`
-	BytesSent  int64   `json:"bytesSent"`
-	TotalBytes int64   `json:"totalBytes"`
-	Percentage float64 `json:"percentage"`
-	Status     string  `json:"status"`
-}
-
-type FolderTransferProgress struct {
-	CurrentFile    string  `json:"currentFile"`
-	FilesDone      int     `json:"filesDone"`
-	FilesTotal     int     `json:"filesTotal"`
-	BytesDone      int64   `json:"bytesDone"`
-	BytesTotal     int64   `json:"bytesTotal"`
-	Percentage     float64 `json:"percentage"`
-	Status         string  `json:"status"`
-	ContainsFolder bool    `json:"containsFolder"`
 }
 
 type DialogActionRequest struct {

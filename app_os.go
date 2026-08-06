@@ -35,11 +35,49 @@ func isSystemPath(path string) bool {
 	return !strings.HasPrefix(cleanPath, "/home/root")
 }
 
+// makeFilesystemWritable counts holders so one finishing transfer does not remount the root read-only under another.
 func (a *App) makeFilesystemWritable(client *ssh.Client) error {
 	if !a.connectedDeviceType.IsPaperPro() {
 		return nil
 	}
 
+	a.writableRootMu.Lock()
+	defer a.writableRootMu.Unlock()
+
+	if a.writableRootCount > 0 {
+		a.writableRootCount++
+		return nil
+	}
+
+	if err := a.remountRootWritable(client); err != nil {
+		return err
+	}
+
+	a.writableRootCount++
+	return nil
+}
+
+func (a *App) releaseWritableRoot(client *ssh.Client) error {
+	if !a.connectedDeviceType.IsPaperPro() {
+		return nil
+	}
+
+	a.writableRootMu.Lock()
+	defer a.writableRootMu.Unlock()
+
+	if a.writableRootCount == 0 {
+		return nil
+	}
+
+	a.writableRootCount--
+	if a.writableRootCount > 0 {
+		return nil
+	}
+
+	return a.restoreFilesystemWithRetry(client)
+}
+
+func (a *App) remountRootWritable(client *ssh.Client) error {
 	session, err := client.NewSession()
 	if err != nil {
 		return fmt.Errorf("failed to create session: %w", err)
@@ -110,7 +148,7 @@ func (a *App) restoreFilesystemWithRetry(client *ssh.Client) error {
 }
 
 func (a *App) restoreFilesystemDeferred(client *ssh.Client) {
-	if err := a.restoreFilesystemWithRetry(client); err != nil {
+	if err := a.releaseWritableRoot(client); err != nil {
 		runtime.EventsEmit(a.ctx, "filesystem:restore-error", map[string]interface{}{
 			"message": err.Error(),
 		})
@@ -128,7 +166,7 @@ func (a *App) withWritableRoot(client *ssh.Client, path string, operation func()
 
 	opErr := operation()
 
-	restoreErr := a.restoreFilesystemWithRetry(client)
+	restoreErr := a.releaseWritableRoot(client)
 	if restoreErr != nil {
 		runtime.EventsEmit(a.ctx, "filesystem:restore-error", map[string]interface{}{
 			"message":            restoreErr.Error(),

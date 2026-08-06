@@ -34,7 +34,7 @@ import { Banner } from '@/components/ui/banner'
 import { Loader2, Check, AlertTriangle, AlertCircle, WifiOff, Info, CheckCircle2, BookOpen, Cpu } from 'lucide-react'
 import { Checkbox } from '@/components/ui/checkbox'
 import { formatOsRange, launcherSelected } from '@/lib/format'
-import { PackageInfo, CompatibilityResult, MaintenanceCommandInfo, SystemTaskInfo, SSHKey, SavedDevice, UpdateServiceStatus, InstallSimulationResult, UninstallSimulationResult, InstalledPackagesResult, HashtabVersionStatus, TimezoneStatus, VirtualChoice, PackageConflict, Step } from '@/lib/types'
+import { PackageInfo, CompatibilityResult, MaintenanceCommandInfo, SystemTaskInfo, SSHKey, SavedDevice, UpdateServiceStatus, InstallSimulationResult, UninstallSimulationResult, InstalledPackagesResult, HashtabVersionStatus, TimezoneStatus, VirtualChoice, PackageConflict, Step, TransferSnapshot } from '@/lib/types'
 
 declare global {
   interface Window {
@@ -126,7 +126,10 @@ declare global {
           UploadFilesFromPaths(localPaths: string[], remotePath: string): void
           DownloadFolder(remotePath: string): void
           UploadFolder(remotePath: string): void
-          CancelFolderTransfer(): void
+          CancelTransfer(id: string): void
+          CancelAllTransfers(): void
+          ClearCompletedTransfers(): void
+          GetTransfers(): Promise<TransferSnapshot>
           DeletePath(path: string): Promise<void>
           RenamePath(oldPath: string, newPath: string): Promise<void>
           CreateDirectory(path: string): Promise<void>
