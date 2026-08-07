@@ -289,10 +289,12 @@ export function ModsTab({
 
   const [queueConflict, setQueueConflict] = useState<{ entries: QueueConflictEntry[] } | null>(null)
   const queueConflicts = queueConflict?.entries ?? []
+  const [impliedPackages, setImpliedPackages] = useState<Set<string>>(new Set())
 
   useEffect(() => {
     if (connectionStatus !== 'connected' || installQueue.size === 0) {
       setQueueConflict(null)
+      setImpliedPackages(new Set())
       return
     }
     let stale = false
@@ -301,12 +303,22 @@ export function ModsTab({
         .then(sim => {
           if (stale) return
           setQueueConflict(sim.error ? { entries: sim.conflicts || [] } : null)
+          setImpliedPackages(sim.error ? new Set() : new Set(
+            (sim.packages || []).filter(name => !installQueue.has(name) && !installedPackages.has(name))
+          ))
           if (!sim.error) setQueueError(null)
         })
         .catch(err => console.error('queue conflict check failed:', err))
     }, 400)
     return () => { stale = true; window.clearTimeout(timer) }
   }, [installQueue, installedKey, device, connectionStatus])
+
+  const availableMarks = useMemo(
+    () => availableFiltered.map(pkg =>
+      installQueue.has(pkg.name) ? 'queued' : impliedPackages.has(pkg.name) ? 'implied' : null
+    ),
+    [availableFiltered, installQueue, impliedPackages]
+  )
 
   const queueBarRef = useRef<HTMLDivElement>(null)
   const queueVisible = installQueue.size > 0 || uninstallQueue.size > 0
@@ -783,12 +795,13 @@ export function ModsTab({
                     <AccordionContent>
                       <div className="divide-y px-6 pb-4">
                         {availableFiltered.map((pkg, index) => {
-                          const isQueued = installQueue.has(pkg.name)
-                          const prevQueued = index > 0 && installQueue.has(availableFiltered[index - 1].name)
-                          const nextQueued = index < availableFiltered.length - 1 && installQueue.has(availableFiltered[index + 1].name)
+                          const mark = availableMarks[index]
+                          const isQueued = mark === 'queued'
+                          const startsGroup = availableMarks[index - 1] !== mark
+                          const endsGroup = availableMarks[index + 1] !== mark
                           const conflict = getConflict(pkg)
                           return (
-                            <div key={pkg.name} className={`py-3 flex items-center gap-4 ${!pkg.compatible ? 'opacity-50' : ''} ${isQueued ? `border-l-4 border-primary pl-3 ${!prevQueued ? 'border-t' : ''} ${!nextQueued ? 'border-b' : ''}` : index % 2 === 1 ? 'bg-muted/50 hover:bg-muted' : 'hover:bg-muted/70'}`}>
+                            <div key={pkg.name} className={`py-3 flex items-center gap-4 ${!pkg.compatible ? 'opacity-50' : ''} ${mark ? `border-l-4 ${isQueued ? 'border-primary' : 'border-primary/40'} pl-3 ${startsGroup ? 'border-t' : ''} ${endsGroup ? 'border-b' : ''}` : index % 2 === 1 ? 'bg-muted/50 hover:bg-muted' : 'hover:bg-muted/70'}`}>
                             <div
                               className="flex-1 min-w-0 cursor-pointer"
                               onClick={() => { setSidebarViewOnly(false); setSidebarIncompatible(!pkg.compatible); setSelectedPackage(pkg) }}
