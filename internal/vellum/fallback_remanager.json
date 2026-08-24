@@ -87,7 +87,8 @@
           "description": "Display the tablet address, username, and Klaus pairing password",
           "command": "/home/root/.vellum/bin/klaus-remarkable-pairing",
           "requiresTerminal": false,
-          "allowStop": false
+          "allowStop": false,
+          "sensitiveOutput": true
         }
       ]
     }

@@ -24,25 +24,25 @@ import (
 )
 
 type PackageInfo struct {
-	Name           string                `json:"name"`
-	Version        string                `json:"version"`
-	Description    string                `json:"description"`
-	UpstreamAuthor string                `json:"upstreamAuthor"`
-	Categories     []string              `json:"categories"`
-	URL            string                `json:"url"`
-	License        string                `json:"license"`
-	Devices        []string              `json:"devices"`
-	Depends        []string              `json:"depends"`
-	Conflicts      []string              `json:"conflicts"`
-	Provides       []string              `json:"provides"`
-	OSMin          *string               `json:"osMin"`
-	OSMax          *string               `json:"osMax"`
-	OSConstraints  []vellum.OSConstraint `json:"osConstraints"`
+	Name               string                `json:"name"`
+	Version            string                `json:"version"`
+	Description        string                `json:"description"`
+	UpstreamAuthor     string                `json:"upstreamAuthor"`
+	Categories         []string              `json:"categories"`
+	URL                string                `json:"url"`
+	License            string                `json:"license"`
+	Devices            []string              `json:"devices"`
+	Depends            []string              `json:"depends"`
+	Conflicts          []string              `json:"conflicts"`
+	Provides           []string              `json:"provides"`
+	OSMin              *string               `json:"osMin"`
+	OSMax              *string               `json:"osMax"`
+	OSConstraints      []vellum.OSConstraint `json:"osConstraints"`
 	Compatible         bool                  `json:"compatible"`
 	IncompatibleReason string                `json:"incompatibleReason,omitempty"`
 	Status             string                `json:"status"`
-	DonateURL      *string               `json:"donateUrl"`
-	ReadmeURL      *string               `json:"readmeUrl"`
+	DonateURL          *string               `json:"donateUrl"`
+	ReadmeURL          *string               `json:"readmeUrl"`
 }
 
 type MaintenanceCommandInfo struct {
@@ -167,25 +167,25 @@ func (a *App) GetPackages(deviceType, firmware, arch string) []PackageInfo {
 			}
 		}
 		result = append(result, PackageInfo{
-			Name:           pkg.Name,
-			Version:        pkg.Version,
-			Description:    pkg.Description,
-			UpstreamAuthor: pkg.UpstreamAuthor,
-			Categories:     pkg.Categories,
-			URL:            pkg.URL,
-			License:        pkg.License,
-			Devices:        pkg.Devices,
-			Depends:        visibleDepends,
-			Conflicts:      pkg.Conflicts,
-			Provides:       pkg.Provides,
-			OSMin:          pkg.OSMin,
-			OSMax:          pkg.OSMax,
-			OSConstraints:  pkg.OSConstraints,
+			Name:               pkg.Name,
+			Version:            pkg.Version,
+			Description:        pkg.Description,
+			UpstreamAuthor:     pkg.UpstreamAuthor,
+			Categories:         pkg.Categories,
+			URL:                pkg.URL,
+			License:            pkg.License,
+			Devices:            pkg.Devices,
+			Depends:            visibleDepends,
+			Conflicts:          pkg.Conflicts,
+			Provides:           pkg.Provides,
+			OSMin:              pkg.OSMin,
+			OSMax:              pkg.OSMax,
+			OSConstraints:      pkg.OSConstraints,
 			Compatible:         pkg.Compatible,
 			IncompatibleReason: pkg.IncompatibleReason,
 			Status:             pkg.Status,
-			DonateURL:      pkg.DonateURL,
-			ReadmeURL:      pkg.ReadmeURL,
+			DonateURL:          pkg.DonateURL,
+			ReadmeURL:          pkg.ReadmeURL,
 		})
 	}
 
@@ -1303,7 +1303,11 @@ func (a *App) RunMaintenanceCommand(pkgName, commandID, deviceType string) {
 		}
 
 		runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("$ %s\n", cmd.Command))
-		a.RunCommandWithOutput(cmd.Command, cmd.RequiresTerminal)
+		if cmd.SensitiveOutput {
+			a.runCommandWithOutput(cmd.Command, cmd.RequiresTerminal, false)
+		} else {
+			a.RunCommandWithOutput(cmd.Command, cmd.RequiresTerminal)
+		}
 	}()
 }
 

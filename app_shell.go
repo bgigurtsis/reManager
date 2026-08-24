@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"sync"
 	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -85,13 +86,20 @@ func (a *App) runCommand(cmd string) (string, error) {
 }
 
 func (a *App) RunCommandWithOutput(cmd string, requiresPTY bool) {
+	a.runCommandWithOutput(cmd, requiresPTY, true)
+}
+
+func (a *App) runCommandWithOutput(cmd string, requiresPTY, logOutput bool) {
 	debug.Println("[DEBUG] RunCommandWithOutput called:", cmd[:min(50, len(cmd))], "requiresPTY:", requiresPTY)
 	cmdLog := a.operationLog
-	ownLog := cmdLog == nil
+	if !logOutput {
+		cmdLog = nil
+	}
+	ownLog := logOutput && cmdLog == nil
 	if ownLog && a.logger != nil {
 		cmdLog = a.logger.StartCommandLog(a.connectedDeviceID, cmd)
 	}
-	if !ownLog {
+	if cmdLog != nil && !ownLog {
 		cmdLog.Write(fmt.Sprintf("\n$ %s\n", cmd))
 	}
 	go func() {
@@ -188,7 +196,10 @@ func (a *App) RunCommandWithOutput(cmd string, requiresPTY bool) {
 			stdin.Close()
 		}
 
+		var readers sync.WaitGroup
+		readers.Add(2)
 		go func() {
+			defer readers.Done()
 			buf := make([]byte, 1024)
 			for {
 				n, err := stdout.Read(buf)
@@ -196,7 +207,9 @@ func (a *App) RunCommandWithOutput(cmd string, requiresPTY bool) {
 					debug.Printf("[DEBUG] stdout: %d bytes\n", n)
 					chunk := string(buf[:n])
 					runtime.EventsEmit(a.ctx, "command:output", chunk)
-					cmdLog.Write(chunk)
+					if cmdLog != nil {
+						cmdLog.Write(chunk)
+					}
 				}
 				if err == io.EOF {
 					break
@@ -208,6 +221,7 @@ func (a *App) RunCommandWithOutput(cmd string, requiresPTY bool) {
 		}()
 
 		go func() {
+			defer readers.Done()
 			buf := make([]byte, 1024)
 			for {
 				n, err := stderr.Read(buf)
@@ -215,7 +229,9 @@ func (a *App) RunCommandWithOutput(cmd string, requiresPTY bool) {
 					debug.Printf("[DEBUG] stderr: %d bytes\n", n)
 					chunk := string(buf[:n])
 					runtime.EventsEmit(a.ctx, "command:output", chunk)
-					cmdLog.Write(chunk)
+					if cmdLog != nil {
+						cmdLog.Write(chunk)
+					}
 				}
 				if err == io.EOF {
 					break
@@ -227,7 +243,8 @@ func (a *App) RunCommandWithOutput(cmd string, requiresPTY bool) {
 		}()
 
 		err = session.Wait()
-		if ownLog {
+		readers.Wait()
+		if ownLog && cmdLog != nil {
 			cmdLog.WriteExitCode(err)
 		}
 		debug.Println("[DEBUG] Command done, success:", err == nil)

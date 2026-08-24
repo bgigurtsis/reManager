@@ -92,6 +92,9 @@ func TestFallbackMetadataHasKlausPairingAction(t *testing.T) {
 	if commands[0].Command != "/home/root/.vellum/bin/klaus-remarkable-pairing" {
 		t.Errorf("embedded Klaus command = %q", commands[0].Command)
 	}
+	if !commands[0].SensitiveOutput {
+		t.Error("embedded Klaus action must keep its output out of command logs")
+	}
 }
 
 func TestRemoteMetadataKeepsFallbackPackageActions(t *testing.T) {

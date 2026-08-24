@@ -63,6 +63,7 @@ type MaintenanceCommand struct {
 	RequiresTerminal bool   `json:"requiresTerminal,omitempty"`
 	AllowStop        bool   `json:"allowStop,omitempty"`
 	Hook             string `json:"hook,omitempty"`
+	SensitiveOutput  bool   `json:"sensitiveOutput,omitempty"`
 }
 
 type PackageHooks struct {
