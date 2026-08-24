@@ -18,6 +18,7 @@ import { Badge } from '@/components/ui/badge'
 import { Loader2, Check, AlertTriangle, AlertCircle, Trash2, Plus, X, Search, RefreshCw } from 'lucide-react'
 import { useAppContext } from '@/contexts/AppContext'
 import { MaintenanceCommandInfo, PackageInfo, VirtualChoice, PackageConflict, QueueConflictEntry } from '@/lib/types'
+import { toast } from 'sonner'
 
 export type SelectPackageForOSFn = (name: string, targetOS: string, isCompatible?: boolean) => Promise<void>
 
@@ -198,6 +199,19 @@ export function ModsTab({
 
   const [simulatingInstall, setSimulatingInstall] = useState(false)
   const [simulatingUninstall, setSimulatingUninstall] = useState(false)
+  const [pairingWithKlaus, setPairingWithKlaus] = useState(false)
+
+  const pairWithKlaus = async () => {
+    setPairingWithKlaus(true)
+    try {
+      const message = await window.go.main.App.PairKlausRemarkable()
+      toast.success(message || 'Paired Paper Pure with Klaus')
+    } catch (error) {
+      toast.error('Could not pair with Klaus: ' + (error instanceof Error ? error.message : String(error)))
+    } finally {
+      setPairingWithKlaus(false)
+    }
+  }
 
   const [pendingUninstall, setPendingUninstall] = useState<{
     componentIds: string[]
@@ -1234,6 +1248,8 @@ export function ModsTab({
               maintenanceCommands={maintenanceCommands[selectedPackage.name] || []}
               onRunMaintenanceCommand={(commandId) => handleComponentMaintenance(selectedPackage.name, commandId)}
               maintenanceDisabled={installing || uninstalling || connectionStatus !== 'connected'}
+              onPairWithKlaus={pairWithKlaus}
+              pairingWithKlaus={pairingWithKlaus}
               onBack={sidebarHistory.length > 0 ? () => {
                 const prev = sidebarHistory[sidebarHistory.length - 1]
                 setSidebarHistory(h => h.slice(0, -1))

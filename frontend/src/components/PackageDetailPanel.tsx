@@ -1,7 +1,7 @@
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet'
-import { ExternalLink, Plus, Trash2, Check, AlertTriangle, ArrowLeft, ArrowRight, X, Heart, BookOpen } from 'lucide-react'
+import { ExternalLink, Plus, Trash2, Check, AlertTriangle, ArrowLeft, ArrowRight, X, Heart, BookOpen, Loader2 } from 'lucide-react'
 import { StatusBadge } from '@/components/StatusBadge'
 import { MaintenanceCommandInfo, PackageInfo } from '@/lib/types'
 import { formatOsRange } from '@/lib/format'
@@ -34,6 +34,8 @@ interface PackageDetailPanelProps {
   maintenanceCommands?: MaintenanceCommandInfo[]
   onRunMaintenanceCommand?: (commandId: string) => void
   maintenanceDisabled?: boolean
+  onPairWithKlaus?: () => void
+  pairingWithKlaus?: boolean
 }
 
 const deviceLabels: Record<string, string> = {
@@ -67,6 +69,8 @@ export function PackageDetailPanel({
   maintenanceCommands = [],
   onRunMaintenanceCommand,
   maintenanceDisabled = false,
+  onPairWithKlaus,
+  pairingWithKlaus = false,
 }: PackageDetailPanelProps) {
   const osRange = formatOsRange(pkg)
 
@@ -297,6 +301,15 @@ export function PackageDetailPanel({
           <div className="mt-4 border-t pt-3">
             <h3 className="text-sm font-medium mb-2">Actions</h3>
             <div className="flex flex-col gap-2">
+              {pkg.name === 'klaus-remarkable' && onPairWithKlaus && (
+                <Button
+                  onClick={onPairWithKlaus}
+                  disabled={maintenanceDisabled || pairingWithKlaus}
+                >
+                  {pairingWithKlaus && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                  {pairingWithKlaus ? 'Pairing with Klaus...' : 'Pair with Klaus'}
+                </Button>
+              )}
               {maintenanceCommands.map(command => (
                 <Button
                   key={command.id}

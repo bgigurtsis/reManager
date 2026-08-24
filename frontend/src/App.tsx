@@ -102,6 +102,7 @@ declare global {
           GetPackageConflicts(installed: Record<string, string>, queue: string[], deviceType: string, firmware: string): Promise<Record<string, PackageConflict>>
           SimulateUninstall(packageNames: string[]): Promise<UninstallSimulationResult>
           RunMaintenanceCommand(pkgName: string, commandId: string, deviceType: string): Promise<void>
+          PairKlausRemarkable(): Promise<string>
           RunSystemTask(taskId: string, deviceType: string): Promise<void>
           RespondToDialog(response: string): Promise<void>
           CancelInstallation(): Promise<void>
