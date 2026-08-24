@@ -3,7 +3,7 @@ import { Button } from '@/components/ui/button'
 import { SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet'
 import { ExternalLink, Plus, Trash2, Check, AlertTriangle, ArrowLeft, ArrowRight, X, Heart, BookOpen } from 'lucide-react'
 import { StatusBadge } from '@/components/StatusBadge'
-import { PackageInfo } from '@/lib/types'
+import { MaintenanceCommandInfo, PackageInfo } from '@/lib/types'
 import { formatOsRange } from '@/lib/format'
 
 function conflictName(entry: string): string {
@@ -31,6 +31,9 @@ interface PackageDetailPanelProps {
   showIncompatible?: boolean
   onViewReadme?: (url: string) => void
   onBack?: () => void
+  maintenanceCommands?: MaintenanceCommandInfo[]
+  onRunMaintenanceCommand?: (commandId: string) => void
+  maintenanceDisabled?: boolean
 }
 
 const deviceLabels: Record<string, string> = {
@@ -61,6 +64,9 @@ export function PackageDetailPanel({
   showIncompatible = false,
   onViewReadme,
   onBack,
+  maintenanceCommands = [],
+  onRunMaintenanceCommand,
+  maintenanceDisabled = false,
 }: PackageDetailPanelProps) {
   const osRange = formatOsRange(pkg)
 
@@ -285,6 +291,24 @@ export function PackageDetailPanel({
           <p className="text-sm text-muted-foreground mt-4 border-t pt-3">
             Detailed package information requires an internet connection.
           </p>
+        )}
+
+        {isInstalled && maintenanceCommands.length > 0 && onRunMaintenanceCommand && (
+          <div className="mt-4 border-t pt-3">
+            <h3 className="text-sm font-medium mb-2">Actions</h3>
+            <div className="flex flex-col gap-2">
+              {maintenanceCommands.map(command => (
+                <Button
+                  key={command.id}
+                  variant="outline"
+                  onClick={() => onRunMaintenanceCommand(command.id)}
+                  disabled={maintenanceDisabled}
+                >
+                  {command.label}
+                </Button>
+              ))}
+            </div>
+          </div>
         )}
       </div>
 

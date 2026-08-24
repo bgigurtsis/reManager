@@ -17,7 +17,7 @@ import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip
 import { Badge } from '@/components/ui/badge'
 import { Loader2, Check, AlertTriangle, AlertCircle, Trash2, Plus, X, Search, RefreshCw } from 'lucide-react'
 import { useAppContext } from '@/contexts/AppContext'
-import { PackageInfo, VirtualChoice, PackageConflict, QueueConflictEntry } from '@/lib/types'
+import { MaintenanceCommandInfo, PackageInfo, VirtualChoice, PackageConflict, QueueConflictEntry } from '@/lib/types'
 
 export type SelectPackageForOSFn = (name: string, targetOS: string, isCompatible?: boolean) => Promise<void>
 
@@ -57,6 +57,8 @@ interface ModsTabProps {
 
   setActiveTab: (v: 'mods' | 'maintenance' | 'utilities') => void
   handleChecklistUpgrade: () => Promise<void>
+  maintenanceCommands: Record<string, MaintenanceCommandInfo[]>
+  handleComponentMaintenance: (componentId: string, commandId: string) => Promise<void>
   selectPackageForOSRef?: React.MutableRefObject<SelectPackageForOSFn | null>
 }
 
@@ -170,6 +172,8 @@ export function ModsTab({
   setPendingUninstallConfirm,
   setActiveTab,
   handleChecklistUpgrade,
+  maintenanceCommands,
+  handleComponentMaintenance,
   selectPackageForOSRef,
 }: ModsTabProps) {
   const ctx = useAppContext()
@@ -1227,6 +1231,9 @@ export function ModsTab({
               viewOnly={sidebarViewOnly}
               showIncompatible={sidebarIncompatible}
               onViewReadme={handleViewReadme}
+              maintenanceCommands={maintenanceCommands[selectedPackage.name] || []}
+              onRunMaintenanceCommand={(commandId) => handleComponentMaintenance(selectedPackage.name, commandId)}
+              maintenanceDisabled={installing || uninstalling || connectionStatus !== 'connected'}
               onBack={sidebarHistory.length > 0 ? () => {
                 const prev = sidebarHistory[sidebarHistory.length - 1]
                 setSidebarHistory(h => h.slice(0, -1))

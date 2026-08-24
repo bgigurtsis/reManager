@@ -1336,6 +1336,8 @@ export default function App() {
                 setPendingUninstallConfirm={setPendingUninstallConfirm}
                 setActiveTab={setActiveTab}
                 handleChecklistUpgrade={handleChecklistUpgrade}
+                maintenanceCommands={maintenanceCommands}
+                handleComponentMaintenance={handleComponentMaintenance}
                 selectPackageForOSRef={selectPackageForOSRef}
               />
             )}

@@ -80,6 +80,35 @@ func TestFallbackMetadataHasLauncherDefault(t *testing.T) {
 	}
 }
 
+func TestFallbackMetadataHasKlausPairingAction(t *testing.T) {
+	m := NewMetadataStore()
+	commands := m.GetMaintenanceCommands("klaus-remarkable")
+	if len(commands) != 1 {
+		t.Fatalf("embedded Klaus actions = %d, want 1", len(commands))
+	}
+	if commands[0].ID != "show-pairing-details" {
+		t.Errorf("embedded Klaus action = %q, want show-pairing-details", commands[0].ID)
+	}
+	if commands[0].Command != "/home/root/.vellum/bin/klaus-remarkable-pairing" {
+		t.Errorf("embedded Klaus command = %q", commands[0].Command)
+	}
+}
+
+func TestRemoteMetadataKeepsFallbackPackageActions(t *testing.T) {
+	fallback := fallbackRemanagerMetadata()
+	remote := RemanagerMetadata{Packages: map[string]RemanagerPackageInfo{
+		"xovi": {MaintenanceCommands: []MaintenanceCommand{{ID: "remote-action"}}},
+	}}
+
+	merged := mergeRemanagerMetadata(fallback, remote)
+	if got := merged.Packages["xovi"].MaintenanceCommands[0].ID; got != "remote-action" {
+		t.Errorf("remote action = %q, want remote-action", got)
+	}
+	if got := merged.Packages["klaus-remarkable"].MaintenanceCommands; len(got) != 1 {
+		t.Fatalf("fallback Klaus actions = %d, want 1", len(got))
+	}
+}
+
 func TestResolveVirtualChoicesSatisfied(t *testing.T) {
 	m := testStore()
 

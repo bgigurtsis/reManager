@@ -78,6 +78,18 @@
           "command": "/home/root/.vellum/bin/launcherctl status"
         }
       ]
+    },
+    "klaus-remarkable": {
+      "maintenanceCommands": [
+        {
+          "id": "show-pairing-details",
+          "label": "Show pairing details",
+          "description": "Display the tablet address, username, and Klaus pairing password",
+          "command": "/home/root/.vellum/bin/klaus-remarkable-pairing",
+          "requiresTerminal": false,
+          "allowStop": false
+        }
+      ]
     }
   },
   "virtuals": {

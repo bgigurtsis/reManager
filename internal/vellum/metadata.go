@@ -51,7 +51,7 @@ type PackageVersion struct {
 }
 
 type PackagesMetadata struct {
-	Generated string                                `json:"generated"`
+	Generated string                               `json:"generated"`
 	Packages  map[string]map[string]PackageVersion `json:"packages"`
 }
 
@@ -83,6 +83,34 @@ type VirtualConfig struct {
 type RemanagerMetadata struct {
 	Packages map[string]RemanagerPackageInfo `json:"packages"`
 	Virtuals map[string]VirtualConfig        `json:"virtuals,omitempty"`
+}
+
+func fallbackRemanagerMetadata() RemanagerMetadata {
+	var metadata RemanagerMetadata
+	if err := json.Unmarshal(fallbackRemanagerJSON, &metadata); err != nil {
+		debug.Printf("[DEBUG] Failed to parse embedded fallback remanager metadata: %v\n", err)
+	}
+	return metadata
+}
+
+func mergeRemanagerMetadata(base, overlay RemanagerMetadata) RemanagerMetadata {
+	merged := RemanagerMetadata{
+		Packages: make(map[string]RemanagerPackageInfo, len(base.Packages)+len(overlay.Packages)),
+		Virtuals: make(map[string]VirtualConfig, len(base.Virtuals)+len(overlay.Virtuals)),
+	}
+	for name, info := range base.Packages {
+		merged.Packages[name] = info
+	}
+	for name, info := range overlay.Packages {
+		merged.Packages[name] = info
+	}
+	for name, config := range base.Virtuals {
+		merged.Virtuals[name] = config
+	}
+	for name, config := range overlay.Virtuals {
+		merged.Virtuals[name] = config
+	}
+	return merged
 }
 
 type Package struct {
@@ -172,11 +200,7 @@ func buildProviderIndex(pm *PackagesMetadata) map[string][]string {
 }
 
 func NewMetadataStore() *MetadataStore {
-	m := &MetadataStore{}
-	if err := json.Unmarshal(fallbackRemanagerJSON, &m.remanager); err != nil {
-		debug.Printf("[DEBUG] Failed to parse embedded fallback remanager metadata: %v\n", err)
-	}
-	return m
+	return &MetadataStore{remanager: fallbackRemanagerMetadata()}
 }
 
 func (m *MetadataStore) Load() error {
@@ -190,9 +214,7 @@ func (m *MetadataStore) Load() error {
 
 	if err := m.loadRemanagerMetadata(); err != nil {
 		debug.Printf("[DEBUG] HTTP fetch remanager failed: %v, using fallback\n", err)
-		if err := json.Unmarshal(fallbackRemanagerJSON, &m.remanager); err != nil {
-			return fmt.Errorf("failed to parse fallback remanager metadata: %w", err)
-		}
+		m.remanager = fallbackRemanagerMetadata()
 	}
 	debug.Printf("[DEBUG] Loaded %d remanager package configs\n", len(m.remanager.Packages))
 
@@ -249,9 +271,7 @@ func (m *MetadataStore) Refresh() error {
 	m.mu.Lock()
 	m.packages = newPackages
 	m.providers = buildProviderIndex(&m.packages)
-	if len(newRemanager.Packages) > 0 {
-		m.remanager = newRemanager
-	}
+	m.remanager = mergeRemanagerMetadata(fallbackRemanagerMetadata(), newRemanager)
 	m.loaded = true
 	m.err = nil
 	m.mu.Unlock()
@@ -297,7 +317,12 @@ func (m *MetadataStore) loadRemanagerMetadata() error {
 		return err
 	}
 
-	return json.Unmarshal(body, &m.remanager)
+	var remote RemanagerMetadata
+	if err := json.Unmarshal(body, &remote); err != nil {
+		return err
+	}
+	m.remanager = mergeRemanagerMetadata(fallbackRemanagerMetadata(), remote)
+	return nil
 }
 
 func (m *MetadataStore) GetAllPackages() []Package {
@@ -890,5 +915,3 @@ func isVersionCompatible(info PackageVersion, deviceType, firmware, arch string)
 
 	return true
 }
-
-
